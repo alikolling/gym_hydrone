@@ -21,8 +21,8 @@ TURTLE = ''
 
 class hydroneEnv(gym.Env):
     def __init__(self, observation_mode=0, env_stage=1, max_env_size=None, continuous=False, observation_size=24,
-                 action_size=5, min_range=0.1, max_range=2.5, min_ang_vel=-1.5, max_ang_vel=1.5, min_linear_vel=-0.5,
-                 max_linear_vel=0.5, min_altitude_vel=-0.5, max_altitude_vel=0.5, goalbox_distance=0.35, collision_distance=0.08, reward_goal=200.,
+                 action_size=5, min_range=0.1, max_range=10, min_ang_vel=-0.25, max_ang_vel=0.25, min_linear_vel=-0.25,
+                 max_linear_vel=0.25, min_altitude_vel=-0.25, max_altitude_vel=0.25, goalbox_distance=0.35, collision_distance=0.08, reward_goal=200.,
                  reward_collision=-20, angle_out=250, goal_list=None, test_real=False):
 
         self.goal_x = 0
@@ -180,6 +180,9 @@ class hydroneEnv(gym.Env):
         if min(self.lidar_distances) < self.collision_distance:
             done = True
 
+        if (self.position.z < 0.2 or self.position.z > 4.0):
+            done = True
+
         if distance < self.goalbox_distance:
             if not done:
                 self.get_goalbox = True
@@ -256,7 +259,7 @@ class hydroneEnv(gym.Env):
             return np.asarray(state), reward, done, {}
 
     def get_position(self):
-        return [self.position.x, self.position.y]
+        return [self.position.x, self.position.y, self.position.z]
 
     def get_scan(self):
         return self.lidar_distances
