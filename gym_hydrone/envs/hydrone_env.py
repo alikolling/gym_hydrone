@@ -232,6 +232,7 @@ class hydroneEnv(gym.Env):
 
         vel_cmd = Twist()
         vel_cmd.linear.x = self.linear_vel
+        vel_cmd.linear.z = self.altitude_vel
         vel_cmd.angular.z = self.ang_vel
         self.pub_cmd_vel.publish(vel_cmd)
 
