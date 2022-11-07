@@ -21,14 +21,14 @@ TURTLE = ''
 
 class hydroneEnv(gym.Env):
     def __init__(self, observation_mode=0, env_stage=1, max_env_size=None, continuous=False, observation_size=24,
-                 action_size=5, min_range=0.1, max_range=10, min_ang_vel=-0.25, max_ang_vel=0.25, min_linear_vel=-0.25,
-                 max_linear_vel=0.25, min_altitude_vel=-0.25, max_altitude_vel=0.25, goalbox_distance=0.35, collision_distance=0.08, reward_goal=200.,
+                 action_size=5, min_range=0.5, max_range=10, min_ang_vel=-0.25, max_ang_vel=0.25, min_linear_vel=-0.25,
+                 max_linear_vel=0.25, min_altitude_vel=-0.25, max_altitude_vel=0.25, goalbox_distance=0.5, collision_distance=0.65, reward_goal=200.,
                  reward_collision=-20, angle_out=250, goal_list=None, test_real=False):
 
         self.goal_x = 0
         self.goal_y = 0
         self.goal_z = 0
-        self.heading = 0
+        self.heading = np.array([0., 0.])
         self.image = None
         self.initGoal = True
         self.get_goalbox = False
@@ -116,15 +116,19 @@ class hydroneEnv(gym.Env):
         self.position = odom.pose.pose.position
         orientation = odom.pose.pose.orientation
         orientation_list = [orientation.x, orientation.y, orientation.z, orientation.w]
-        _, _, yaw = euler_from_quaternion(orientation_list)
-        goal_angle = math.atan2(self.goal_y - self.position.y, self.goal_x - self.position.x)
+        roll, pitch, yaw = euler_from_quaternion(orientation_list)
+        yaw_angle = math.atan2(self.goal_y - self.position.y, self.goal_x - self.position.x)
+        pitch_angle = math.atan2(self.goal_z - self.position.z, self.goal_x - self.position.x)
 
-        heading = goal_angle - yaw
-        if heading > math.pi:
-            heading -= 2 * math.pi
+        heading = np.array([0., 0.])
+        heading[0] = yaw_angle - yaw
+        heading[1] = pitch_angle - pitch
+        for i in range(2):
+            if heading[i] > math.pi:
+                heading[i] -= 2 * math.pi
 
-        elif heading < -math.pi:
-            heading += 2 * math.pi
+            elif heading[i] < -math.pi:
+                heading[i] += 2 * math.pi
 
         self.heading = heading
 
@@ -175,7 +179,7 @@ class hydroneEnv(gym.Env):
                 if self.respawn_goal.last_index is (self.respawn_goal.len_goal_list - 1):
                     done = True
                     self.episode_finished()
-        return self.get_env_state() + [heading, current_distance], done
+        return self.get_env_state() + [heading[0], heading[1], current_distance], done
 
     def get_done_reward(self, lidar, distance):
         done = False
@@ -234,7 +238,7 @@ class hydroneEnv(gym.Env):
     def step(self, action):
         self.set_ang_vel(np.clip(action[0], self.min_ang_vel, self.max_ang_vel))
         self.set_linear_vel(np.clip(action[1], self.min_linear_vel, self.max_linear_vel))
-        self.set_altitude_vel(np.clip(action[2], self.min_altitude_vel, self.min_altitude_vel))
+        self.set_altitude_vel(np.clip(action[2], self.min_altitude_vel, self.max_altitude_vel))
 
         vel_cmd = Twist()
         vel_cmd.linear.x = self.linear_vel
