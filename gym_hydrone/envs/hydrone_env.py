@@ -286,6 +286,15 @@ class hydroneEnv(gym.Env):
                         and (targets[0,1] < -1.6 and targets[0,1] > -2.9) or (targets[0,1] > 1.6 and targets[0,1] < 2.9)):
                         targets = np.asarray([np.random.uniform((-3.5, -3.5, 0.5), (3.5, 3.5, 3.5)) for _ in range(1)])
                     self.respawn_goal.setGoalList(targets)
+                if self.env_stage == 3:
+                    targets = np.asarray([np.random.uniform((-4.0, -4.0, 0.5), (4.0, 4.0, 3.5)) for _ in range(1)])
+                    if not(((targets[0,0] > -3.15 and targets[0,0] < -4.0) and (targets[0,1] > 2.25 and targets[0,1] < -4.3)) or
+                           ((targets[0,0] > 4.3 and targets[0,0] < 0.6) and (targets[0,1] > -2.25 and targets[0,1] > -4.3)) or
+                           ((targets[0,0] > 4.3 and targets[0,0] < 3.6) and (targets[0,1] > 4.3 and targets[0,1] < 4.1)) or
+                           ((targets[0,0] > 1.6 and targets[0,0] < 0.0) and (targets[0,1] > 1.5 and targets[0,1] < -4.3)) or
+                           ((targets[0,0] > 1.3 and targets[0,0] < -1.44) and (targets[0,1] > 4.3 and targets[0,1] < 3.4))):
+                        targets = np.asarray([np.random.uniform((-4.0, -4.0, 0.5), (4.0, 4.0, 3.5)) for _ in range(1)])
+                    self.respawn_goal.setGoalList(targets)
                 else:
                     self.respawn_goal.setGoalList(np.asarray([np.random.uniform((-3.5, -3.5, 0.5), (3.5, 3.5, 3.5)) for _ in range(1)]))
             else:
