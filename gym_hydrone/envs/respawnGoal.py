@@ -29,23 +29,10 @@ from geometry_msgs.msg import Pose
 class Respawn:
     def __init__(self):
         rospack = rospkg.RosPack()
-        self.modelPath = os.path.join(rospack.get_path('hydrone_aerial_gazebo'), 'models/hydrone_square/goal_box/model.sdf')
+        self.modelPath = os.path.join(rospack.get_path('hydrone_aerial_underwater_gazebo'), 'models/goal_box/model.sdf')
         # print(self.modelPath)
         self.f = open(self.modelPath, 'r')
         self.model = self.f.read()
-        self.goal_position = Pose()
-        self.goal_x_list = None
-        self.goal_y_list = None
-        self.goal_z_list = None
-        self.len_goal_list = None
-        self.index = None
-        self.last_index = None
-        self.init_goal_x = None
-        self.init_goal_y = None
-        self.init_goal_z = None
-        self.goal_position.position.x = None
-        self.goal_position.position.y = None
-        self.goal_position.position.z = None
         self.modelName = 'goal'
         self.check_model = False
         self.sub_model = rospy.Subscriber('gazebo/model_states', ModelStates, self.checkModel)
@@ -56,12 +43,16 @@ class Respawn:
             if model.name[i] == "goal":
                 self.check_model = True
 
-    def respawnModel(self):
+    def respawnModel(self, goal_position):
+        goal_pose = Pose()
+        goal_pose.position.x = goal_position[0]
+        goal_pose.position.y = goal_position[1]
+        goal_pose.position.z = goal_position[2]
         while True:
             if not self.check_model:
                 rospy.wait_for_service('gazebo/spawn_sdf_model')
                 spawn_model_prox = rospy.ServiceProxy('gazebo/spawn_sdf_model', SpawnModel)
-                spawn_model_prox(self.modelName, self.model, 'robotos_name_space', self.goal_position, "world")
+                spawn_model_prox(self.modelName, self.model, 'robotos_name_space', goal_pose, "world")
                 break
             else:
                 pass
@@ -76,35 +67,10 @@ class Respawn:
             else:
                 pass
 
-    def initIndex(self):
-        self.index = 0
-        self.goal_position.position.x = self.init_goal_x
-        self.goal_position.position.y = self.init_goal_y
-        self.goal_position.position.z = self.init_goal_z
-        self.last_index = self.index
 
-    def setGoalList(self, goal_list):
-        self.goal_x_list = [p[0] for p in goal_list]
-        self.goal_y_list = [p[1] for p in goal_list]
-        self.goal_z_list = [p[2] for p in goal_list]
-        self.len_goal_list = len(self.goal_x_list)
-        self.init_goal_x = self.goal_x_list[0]
-        self.init_goal_y = self.goal_y_list[0]
-        self.init_goal_z = self.goal_z_list[0]
-        self.initIndex()
-
-    def getPosition(self, position_check=False, delete=False):
+    def setPosition(self, goal_position, delete=False):
         if delete:
             self.deleteModel()
 
-        if position_check:
-            self.index = (self.last_index + 1) % self.len_goal_list
-            self.last_index = self.index
-
-            self.goal_position.position.x = self.goal_x_list[self.index]
-            self.goal_position.position.y = self.goal_y_list[self.index]
-            self.goal_position.position.z = self.goal_z_list[self.index]
-
         time.sleep(0.5)
-        self.respawnModel()
-        return self.goal_position.position.x, self.goal_position.position.y, self.goal_position.position.z
+        self.respawnModel(goal_position)

@@ -1,8 +1,8 @@
-from gym.envs.registration import register
+from gymnasium.envs.registration import register
 
 register(
-    id='hydrone-v0',
-    entry_point='gym_hydrone.envs:hydroneEnv'
+    id='gym_hydrone/hydrone-v0',
+    entry_point='gym_hydrone.envs:HydroneEnv'
 )
 
 goal_list = [   [0.505, 2.005, 1.0],
@@ -18,13 +18,13 @@ max_env_size = 3
 
 register(
     id='hydrone_Circuit_Simple-v0',
-    entry_point='gym_hydrone.envs:hydroneEnv',
+    entry_point='gym_hydrone.envs:HydroneEnv',
     kwargs={'goal_list': goal_list, 'max_env_size': max_env_size}
 )
 
 register(
     id='hydrone_Circuit_Simple_Continuous-v0',
-    entry_point='gym_hydrone.envs:hydroneEnv',
+    entry_point='gym_hydrone.envs:HydroneEnv',
     kwargs={'goal_list': goal_list, 'max_env_size': max_env_size, 'continuous': True}
 )
 
