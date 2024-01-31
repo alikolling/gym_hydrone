@@ -1,5 +1,3 @@
-#! /usr/bin/env python3
-
 import rospy
 import time
 import numpy as np
@@ -22,7 +20,7 @@ from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from gym.utils import seeding
+#from gym.utils import seeding
 from cv_bridge import CvBridge, CvBridgeError
 
 #import skimage as skimage
@@ -33,18 +31,22 @@ from cv_bridge import CvBridge, CvBridgeError
 TURTLE = ''
 STATE_H, STATE_W = 100, 100
 
-class HydroneEnv(gazebo_env.GazeboEnv):
+class HydroneEnv(gym.Env):
 
     def __init__(self):
         # Launch the simulation with the given launchfile name
-        gazebo_env.GazeboEnv.__init__(self, "/home/hydrone/catkin_ws/src/hydrone_deep_rl_icra/hydrone_aerial_underwater_deep_rl/launch/hydrone_deep_rl.launch")
+        #gazebo_env.GazeboEnv.__init__(self, "/home/hydrone/catkin_ws/src/hydrone_deep_rl_icra/hydrone_aerial_underwater_deep_rl/launch/hydrone_deep_rl.launch")
+        print('a3')
+        rospy.init_node('gym')
+        print('init')
         self.pub_cmd_vel = rospy.Publisher('/hydrone_aerial_underwater/cmd_vel', Twist, queue_size=5)
         self.unpause = rospy.ServiceProxy('/gazebo/unpause_physics', Empty)
         self.pause = rospy.ServiceProxy('/gazebo/pause_physics', Empty)
         self.reset_proxy = rospy.ServiceProxy('/gazebo/reset_world', Empty)
         self.env_stage = 1
+        print('a4')
         self.respawn_goal = Respawn()
-        self._seed()
+        #self._seed()
         self.start_time = time.time()
         self.num_timesteps = 0
         self.initGoal = True
@@ -69,7 +71,7 @@ class HydroneEnv(gazebo_env.GazeboEnv):
         self.img_rows = STATE_H
         self.img_cols = STATE_W
         self.img_channels = 3
-        
+        print('a5')
         self.observation_space = spaces.Dict(
             {
                 "image": spaces.Box(low = 0, high = 255, shape=(self.img_channels,self.img_rows,self.img_cols), dtype=int),
@@ -237,18 +239,18 @@ class HydroneEnv(gazebo_env.GazeboEnv):
         if min(lidar_distances) < self.collision_distance:
             # print(f'{time_info}: Collision!!')
             reward = -1.
-            terminated = True
+            #terminated = True
             rospy.loginfo("Collision!!")
 
         if (observation['state'][2] < self.min_alt or observation['state'][2] > self.max_alt):
             reward = -1.
-            terminated = True
+            #terminated = True
             rospy.loginfo("too high!!")
 
         if observation['target'][2] < self.goalbox_distance:
             reward = 1.
             rospy.loginfo("Goal!! ")
-            terminated = True
+            #terminated = True
         
         vel_cmd = Twist()
         vel_cmd.angular.z = np.clip(action[0], self.min_ang_vel, self.max_ang_vel)

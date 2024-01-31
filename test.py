@@ -5,22 +5,27 @@ import numpy as np
 import gymnasium as gym
 import time
 import gym_hydrone
+from gym_hydrone.wrappers import gymnasium_wrapper
 import os
 import rospy
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
 time.sleep(5)
-os.environ['ROS_MASTER_URI'] = "http://localhost:{}/".format(11310 + 1)
-#rospy.init_node('Potter_Circuit_Simple-v0'.replace('-', '_') + "_w{}".format(1))
-env = gym.make('gym_hydrone/hydrone-v0')
-time.sleep(5)
 
-observation, info = env.reset()
+os.environ['ROS_MASTER_URI'] = "http://localhost:{}/".format(11310 + 1)
+
+
+
+env = gymnasium_wrapper.GymnasiumWrapper(gym.make('gym_hydrone/hydrone-v0'))
+
+time.sleep(5)
+observation = env.reset()
+print(observation)
 for _ in range(100):
     action = [1.0, 1.0, 1.0]
-    observation, reward, terminated, _, info = env.step(action)
-    print(reward)
-    if terminated:
-        observation = env.reset()
+    timestep = env.step(action)
+    print(timestep)
+    #if terminated:
+    #   observation = env.reset()
 
 env.close()

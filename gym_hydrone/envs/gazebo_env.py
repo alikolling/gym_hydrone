@@ -54,7 +54,6 @@ class GazeboEnv(gym.Env):
         print ("Gazebo launched!")
 
         self.gzclient_pid = 0'''
-
         # Launch the simulation with the given launchfile name
         rospy.init_node('gym', anonymous=True)
 
