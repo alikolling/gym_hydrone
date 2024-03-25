@@ -22,10 +22,13 @@ time.sleep(5)
 observation = env.reset()
 print(observation)
 for _ in range(100):
-    action = [1.0, 1.0, 1.0]
+    action = [1000.0, 1000.0, 1000.0, 1000.0]
     timestep = env.step(action)
     print(timestep)
     #if terminated:
-    #   observation = env.reset()
-
+observation = env.reset()
+for _ in range(100):
+    action = [1000.0, 1000.0, 1000.0, 1000.0]
+    timestep = env.step(action)
+    print(timestep)
 env.close()

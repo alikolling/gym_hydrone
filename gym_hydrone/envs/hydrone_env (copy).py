@@ -12,15 +12,11 @@ import copy
 import gymnasium as gym
 from gymnasium import spaces
 from gym_hydrone.envs import gazebo_env
+from geometry_msgs.msg import Twist
 from gym_hydrone.envs.respawnGoal import Respawn
-
+from std_srvs.srv import Empty
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 
-from geometry_msgs.msg import Pose
-from gazebo_msgs.srv import SetModelState
-from gazebo_msgs.msg import ModelState
-from std_srvs.srv import Empty
-from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry
 from mav_msgs.msg import Actuators
@@ -45,7 +41,6 @@ class HydroneEnv(gym.Env):
         rospy.init_node('gym')
 
         self.pub_cmd_vel = rospy.Publisher('/hydrone_aerial_underwater/gazebo/command/motor_speed', Actuators, queue_size=5)
-        self.reset_srv = rospy.ServiceProxy('gazebo/set_model_state', SetModelState)
         self.unpause = rospy.ServiceProxy('/gazebo/unpause_physics', Empty)
         self.pause = rospy.ServiceProxy('/gazebo/pause_physics', Empty)
         self.reset_proxy = rospy.ServiceProxy('/gazebo/reset_world', Empty)
@@ -56,9 +51,9 @@ class HydroneEnv(gym.Env):
         self.start_time = time.time()
         self.num_timesteps = 0
         self.initGoal = True
-        self.last_action = [0., 0., 0., 0.]
+        
         self.collision_distance = 0.35
-        self.goalbox_distance = 0.05
+        self.goalbox_distance = 0.65
 
         self.min_alt = -5.
         self.max_alt = 5.
@@ -81,11 +76,11 @@ class HydroneEnv(gym.Env):
         self.observation_space = spaces.Dict(
             {
                 "image": spaces.Box(low = 0, high = 255, shape=(self.img_channels,self.img_rows,self.img_cols), dtype=int),
-                "state": spaces.Box(low = -2**63, high = 2**63 - 2, shape=(17,), dtype=np.float32),
+                "state": spaces.Box(low = -2**63, high = 2**63 - 2, shape=(13,), dtype=np.float32),
                 "target": spaces.Box(low = -2**63, high = 2**63 - 2, shape=(3,), dtype=np.float32),
             }
         )
-        self.action_space = spaces.Box(low=0, high=1000, shape=(4,), dtype=np.float32)
+        self.action_space = spaces.Box(low=0, high=800, shape=(4,), dtype=np.float32)
         
         
     def seed(self, seed=None):
@@ -124,7 +119,7 @@ class HydroneEnv(gym.Env):
         cv_image = cv_image.reshape(self.img_channels, cv_image.shape[0], cv_image.shape[1])
         return cv_image
         
-    def _get_state_and_heading(self, last_action):
+    def _get_state_and_heading(self):
         state = np.zeros((13,))
         odom = None
         while odom is None:
@@ -136,7 +131,7 @@ class HydroneEnv(gym.Env):
         state[3:6] = [odom.twist.twist.linear.x,odom.twist.twist.linear.y,odom.twist.twist.linear.z]
         state[6:10] = [odom.pose.pose.orientation.x, odom.pose.pose.orientation.y,odom.pose.pose.orientation.z,odom.pose.pose.orientation.w]
         state[10:13] = [odom.twist.twist.angular.x, odom.twist.twist.angular.y, odom.twist.twist.angular.z]
-        state = np.concatenate([state, last_action])
+        
         orientation_list = state[6:10] 
         position = state[0:3]
         roll, pitch, yaw = euler_from_quaternion(orientation_list)
@@ -160,7 +155,7 @@ class HydroneEnv(gym.Env):
         return state, heading
         
     def _get_obs(self):
-        state, heading = self._get_state_and_heading(self.last_action)
+        state, heading = self._get_state_and_heading()
         return {"image": self._get_camera(), "state": state, "target": heading}
 
     def _get_info(self):
@@ -168,9 +163,9 @@ class HydroneEnv(gym.Env):
         time_info += '-' + str(self.num_timesteps)
         return {'time_info': time_info}
 
-    def _random_position(self):
+    def _goal_position(self):
         if self.env_stage == 1:
-                    targets = np.asarray([np.random.uniform((-1.5, -1.5, 1.50), (1.5, 1.5, 2.5)) for _ in range(1)])
+                    targets = np.asarray([np.random.uniform((-3.5, -3.5, 0.05), (3.5, 3.5, 3.5)) for _ in range(1)])
         if self.env_stage == 2:
             targets = np.asarray([np.random.uniform((-3.5, -3.5, 0.5), (3.5, 3.5, 3.5)) for _ in range(1)])
             if ((targets[0,0] < -1.6 and targets[0,0] > -2.9) or (targets[0,0] > 1.6 and targets[0,0] < 2.9) 
@@ -189,6 +184,13 @@ class HydroneEnv(gym.Env):
         return targets
            
     def reset(self):
+        #rospy.loginfo("Reset!! ")
+        rospy.wait_for_service('/gazebo/reset_world')
+        try:
+            #reset_proxy.call()
+            self.reset_proxy()
+        except (rospy.ServiceException) as e:
+            print ("/gazebo/reset_simulation service call failed")
 
         # Unpause simulation to make observation
         rospy.wait_for_service('/gazebo/unpause_physics')
@@ -198,98 +200,27 @@ class HydroneEnv(gym.Env):
         except (rospy.ServiceException) as e:
             print ("/gazebo/unpause_physics service call failed")
 
-        targets = [0.0, 0.0, 2.]
+        targets = self._goal_position()[0]
         self.goal_x = targets[0]
         self.goal_y = targets[1]
         self.goal_z = targets[2]        
         
-        self.initial_vehicle_position = self._random_position()[0]
-            
-        vel_cmd = Actuators()
-        vel_cmd.angular_velocities = [0.0, 0.0, 0.0, 0.0]
-        self.pub_cmd_vel.publish(vel_cmd)
-        
-        reset_state = ModelState()
-        reset_state.model_name = "hydrone_aerial_underwater"
-        pose = Pose()
-        pose.position.x = self.initial_vehicle_position[0]
-        pose.position.y = self.initial_vehicle_position[1]
-        pose.position.z = self.initial_vehicle_position[2]
-        reset_state.pose = pose
-        
-        self.reset_srv(reset_state)
-        
-        reset_state = ModelState()
-        reset_state.model_name = "goal_box"
-        pose = Pose()
-        pose.position.x = self.goal_x
-        pose.position.y = self.goal_y
-        pose.position.z = self.goal_z
-        reset_state.pose = pose
-        
-        self.reset_srv(reset_state)
-        
-        
+        if self.initGoal:
+            self.respawn_goal.setPosition(targets)
+            self.initGoal = False
+            time.sleep(1)
+        else:
+            self.respawn_goal.setPosition(targets, delete=True)
         observation = self._get_obs()
-        
+        '''rospy.wait_for_service('/gazebo/pause_physics')
+        try:
+            #resp_pause = pause.call()
+            self.pause()
+        except (rospy.ServiceException) as e:
+            print ("/gazebo/pause_physics service call failed")'''
         
         return observation, self._get_info()
     
-    def _get_reward(self, observation):
-        reward_col = -1.
-        reward_target = 1.
-        roll, pitch, yaw = euler_from_quaternion(observation['state'][6:10])
-        
-        lidar_distances = self._get_laser()
-        if min(lidar_distances) < self.collision_distance:
-            # print(f'{time_info}: Collision!!')
-            #terminated = True
-            #rospy.loginfo("Collision!!")
-            print(f"Reward collision: {reward_col}",end='\r', flush=True)
-            return reward_col
-        
-        if roll > math.pi/4 or roll < -math.pi/4 or pitch > math.pi/4 or pitch < -math.pi/4:
-            self.initial_vehicle_position = self._random_position()[0]
-                
-            vel_cmd = Actuators()
-            vel_cmd.angular_velocities = [0.0, 0.0, 0.0, 0.0]
-            self.pub_cmd_vel.publish(vel_cmd)
-            reset_state = ModelState()
-            reset_state.model_name = "hydrone_aerial_underwater"
-            pose = Pose()
-            pose.position.x = self.initial_vehicle_position[0]
-            pose.position.y = self.initial_vehicle_position[1]
-            pose.position.z = self.initial_vehicle_position[2]
-            reset_state.pose = pose	    
-            self.reset_srv(reset_state)
-            print(f"Reward flip: {reward_col}",end='\r', flush=True)
-            return reward_col
-            
-        	
-        #if (observation['state'][2] < self.min_alt or observation['state'][2] > self.max_alt):
-        #    reward += -1.
-            #terminated = True
-            #rospy.loginfo("too high!!")
-
-        if observation['target'][2] < self.goalbox_distance:
-
-            #rospy.loginfo("Goal!! ")
-            #terminated = True
-            print(f"Reward: {reward_target}",end='\r', flush=True)
-            return reward_target
-            
-        
-        reward_dist = max(0., 1 - np.linalg.norm(np.asarray([self.goal_x,self.goal_y,self.goal_z])-np.asarray(observation['state'][0:3])) - math.sqrt((self.goal_z-observation['state'][2])**2))
-        
-        if observation['state'][2] < 0.5:
-            reward_dist -= 0.5
-        
-        #reward_ang = 0.1 * np.linalg.norm(np.asarray([roll, pitch]))
-        #reward_ang_vel = 0.1 * np.linalg.norm(np.asarray(observation['state'][10:13]))
-        
-        print(f"Reward: {reward_dist}",end='\r', flush=True)
-            
-        return reward_dist
     
     def step(self, action):
         #rospy.loginfo("Step!! ")
@@ -301,20 +232,34 @@ class HydroneEnv(gym.Env):
             print ("/gazebo/unpause_physics service call failed")'''
         
         observation = self._get_obs()
+        lidar_distances = self._get_laser()
         
-        reward = self._get_reward(observation)
-        
+        reward = 0.
         terminated = False
+        
+        if min(lidar_distances) < self.collision_distance:
+            # print(f'{time_info}: Collision!!')
+            reward = -1.
+            #terminated = True
+            #rospy.loginfo("Collision!!")
 
+        if (observation['state'][2] < self.min_alt or observation['state'][2] > self.max_alt):
+            reward = -1.
+            #terminated = True
+            #rospy.loginfo("too high!!")
+
+        if observation['target'][2] < self.goalbox_distance:
+            reward = 1.
+            #rospy.loginfo("Goal!! ")
+            #terminated = True
+        
         '''vel_cmd = Twist()
         vel_cmd.angular.z = np.clip(action[0], self.min_ang_vel, self.max_ang_vel)
         vel_cmd.linear.x = np.clip(action[1], self.min_linear_vel, self.max_linear_vel)
         vel_cmd.linear.z = np.clip(action[2], self.min_altitude_vel, self.max_altitude_vel)'''
         vel_cmd = Actuators()
-        vel_cmd.angular_velocities = np.clip(action, 0, 1000)
+        vel_cmd.angular_velocities = np.clip(action, 0, 800)
         self.pub_cmd_vel.publish(vel_cmd)
-        
-        self.last_action = action
                 
         '''rospy.wait_for_service('/gazebo/pause_physics')
         try:

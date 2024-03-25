@@ -29,7 +29,7 @@ from geometry_msgs.msg import Pose
 class Respawn:
     def __init__(self):
         rospack = rospkg.RosPack()
-        self.modelPath = os.path.join(rospack.get_path('hydrone_aerial_underwater_gazebo'), 'models/goal_box/model.sdf')
+        self.modelPath = os.path.join(rospack.get_path('hydrone_aerial_underwater_deep_rl'), 'models/goal_box/model.sdf')
         # print(self.modelPath)
         self.f = open(self.modelPath, 'r')
         self.model = self.f.read()
