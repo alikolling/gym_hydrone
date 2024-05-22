@@ -11,9 +11,7 @@ from gymnasium import spaces
 from mav_msgs.msg import Actuators
 from nav_msgs.msg import Odometry
 from std_srvs.srv import Empty
-from tf.transformations import euler_from_quaternion
-
-from gym_hydrone.envs.respawnGoal import Respawn
+from tf.transformations import euler_from_quaternion, quaternion_from_euler
 
 
 class HydroneEnv(gym.Env):
@@ -28,13 +26,11 @@ class HydroneEnv(gym.Env):
         self.unpause = rospy.ServiceProxy("/gazebo/unpause_physics", Empty)
         self.pause = rospy.ServiceProxy("/gazebo/pause_physics", Empty)
         self.reset_proxy = rospy.ServiceProxy("/gazebo/reset_world", Empty)
-        self.env_stage = 1
 
-        self.respawn_goal = Respawn()
-        # self._seed()
-        self.start_time = time.time()
         self.num_timesteps = 0
-        self.initGoal = True
+        self.goal = [0.0, 0.0, 2.0]
+        self.initial_vehicle_position = None
+        self.initial_vehicle_orientation = None
         self.last_action = [0.0, 0.0, 0.0, 0.0]
         self.collision_distance = 0.35
         self.goalbox_distance = 0.05
@@ -42,21 +38,11 @@ class HydroneEnv(gym.Env):
         self.min_alt = -5.0
         self.max_alt = 5.0
 
-        self.observation_space = spaces.Dict(
-            {
-                "state": spaces.Box(
-                    low=-(2**63), high=2**63 - 2, shape=(20,), dtype=np.float32
-                ),
-                "target": spaces.Box(
-                    low=-(2**63), high=2**63 - 2, shape=(3,), dtype=np.float32
-                ),
-            }
+        self.observation_space = spaces.Box(
+            low=-(2**63), high=2**63 - 2, shape=(23,), dtype=np.float32
         )
-        self.action_space = spaces.Box(low=0, high=1800, shape=(4,), dtype=np.float32)
 
-    def seed(self, seed=None):
-        self.np_random, seed = seeding.np_random(seed)
-        return [seed]
+        self.action_space = spaces.Box(low=0, high=1800, shape=(4,), dtype=np.float32)
 
     def _get_state_and_heading(self, last_action):
         state = np.zeros((13,))
@@ -66,7 +52,7 @@ class HydroneEnv(gym.Env):
                 odom = rospy.wait_for_message(
                     "/haubentaucher/ground_truth/odometry", Odometry, timeout=5
                 )
-            except:
+            except rospy.ServiceException:
                 pass
         state[0:3] = [
             odom.pose.pose.position.x,
@@ -92,7 +78,7 @@ class HydroneEnv(gym.Env):
         state = np.concatenate([state, last_action])
         orientation_list = state[6:10]
         position = state[0:3]
-        roll, pitch, yaw = euler_from_quaternion(orientation_list)
+        _ , pitch, yaw = euler_from_quaternion(orientation_list)
 
         yaw_angle = math.atan2(self.goal_y - position[1], self.goal_x - position[0])
         pitch_angle = math.atan2(self.goal_z - position[2], self.goal_x - position[0])
@@ -114,11 +100,12 @@ class HydroneEnv(gym.Env):
         )
         heading[2] = goal_distance
 
-        return state, heading
+        obs = np.concatenate([state, heading])
+        return obs
 
     def _get_obs(self):
-        state, heading = self._get_state_and_heading(self.last_action)
-        return {"state": state, "target": heading}
+        obs = self._get_state_and_heading(self.last_action)
+        return obs
 
     def _get_info(self):
         time_info = time.strftime(
@@ -128,70 +115,17 @@ class HydroneEnv(gym.Env):
         return {"time_info": time_info}
 
     def _random_position(self):
-        if self.env_stage == 1:
-            targets = np.asarray(
-                [
-                    np.random.uniform((-1.5, -1.5, 1.50), (1.5, 1.5, 2.5))
-                    for _ in range(1)
-                ]
-            )
-        if self.env_stage == 2:
-            targets = np.asarray(
-                [
-                    np.random.uniform((-3.5, -3.5, 0.5), (3.5, 3.5, 3.5))
-                    for _ in range(1)
-                ]
-            )
-            if (
-                (targets[0, 0] < -1.6 and targets[0, 0] > -2.9)
-                or (targets[0, 0] > 1.6 and targets[0, 0] < 2.9)
-                and (targets[0, 1] < -1.6 and targets[0, 1] > -2.9)
-                or (targets[0, 1] > 1.6 and targets[0, 1] < 2.9)
-            ):
-                targets = np.asarray(
-                    [
-                        np.random.uniform((-3.5, -3.5, 0.5), (3.5, 3.5, 3.5))
-                        for _ in range(1)
-                    ]
-                )
-
-        if self.env_stage == 3:
-            targets = np.asarray(
-                [
-                    np.random.uniform((-4.0, -4.0, 0.5), (4.0, 4.0, 3.5))
-                    for _ in range(1)
-                ]
-            )
-            if not (
-                (
-                    (targets[0, 0] > -3.15 and targets[0, 0] < -4.0)
-                    and (targets[0, 1] > 2.25 and targets[0, 1] < -4.3)
-                )
-                or (
-                    (targets[0, 0] > 4.3 and targets[0, 0] < 0.6)
-                    and (targets[0, 1] > -2.25 and targets[0, 1] > -4.3)
-                )
-                or (
-                    (targets[0, 0] > 4.3 and targets[0, 0] < 3.6)
-                    and (targets[0, 1] > 4.3 and targets[0, 1] < 4.1)
-                )
-                or (
-                    (targets[0, 0] > 1.6 and targets[0, 0] < 0.0)
-                    and (targets[0, 1] > 1.5 and targets[0, 1] < -4.3)
-                )
-                or (
-                    (targets[0, 0] > 1.3 and targets[0, 0] < -1.44)
-                    and (targets[0, 1] > 4.3 and targets[0, 1] < 3.4)
-                )
-            ):
-                targets = np.asarray(
-                    [
-                        np.random.uniform((-4.0, -4.0, 0.5), (4.0, 4.0, 3.5))
-                        for _ in range(1)
-                    ]
-                )
+        targets = np.random.uniform((-1.5, -1.5, 1.50), (1.5, 1.5, 2.5))
 
         return targets
+
+    def _random_orientation(self):
+        euler_angs = np.random.uniform(
+            (-math.pi / 4, -math.pi / 4, -math.pi), (math.pi / 4, math.pi / 4, math.pi)
+        )
+        quat_targs = quaternion_from_euler(euler_angs[0], euler_angs[1], euler_angs[2])
+
+        return quat_targs
 
     def reset(self):
 
@@ -200,15 +134,13 @@ class HydroneEnv(gym.Env):
         try:
             # resp_pause = pause.call()
             self.unpause()
-        except rospy.ServiceException as e:
+        except rospy.ServiceException:
             print("/gazebo/unpause_physics service call failed")
 
-        targets = [0.0, 0.0, 2.0]
-        self.goal_x = targets[0]
-        self.goal_y = targets[1]
-        self.goal_z = targets[2]
+        self.goal = [0.0, 0.0, 2.0]
 
-        self.initial_vehicle_position = [0.0, 0.0, 2.0]
+        self.initial_vehicle_position = self._random_position()
+        self.initial_vehicle_orientation = self._random_orientation()
 
         vel_cmd = Actuators()
         vel_cmd.angular_velocities = [0.0, 0.0, 0.0, 0.0]
@@ -220,6 +152,10 @@ class HydroneEnv(gym.Env):
         pose.position.x = self.initial_vehicle_position[0]
         pose.position.y = self.initial_vehicle_position[1]
         pose.position.z = self.initial_vehicle_position[2]
+        pose.orientation.w = self.initial_vehicle_orientation[0]
+        pose.orientation.x = self.initial_vehicle_orientation[1]
+        pose.orientation.y = self.initial_vehicle_orientation[2]
+        pose.orientation.z = self.initial_vehicle_orientation[3]
         reset_state.pose = pose
 
         self.reset_srv(reset_state)
@@ -227,9 +163,9 @@ class HydroneEnv(gym.Env):
         reset_state = ModelState()
         reset_state.model_name = "goal_box"
         pose = Pose()
-        pose.position.x = self.goal_x
-        pose.position.y = self.goal_y
-        pose.position.z = self.goal_z
+        pose.position.x = self.goal[0]
+        pose.position.y = self.goal[1]
+        pose.position.z = self.goal[2]
         reset_state.pose = pose
 
         self.reset_srv(reset_state)
@@ -240,7 +176,7 @@ class HydroneEnv(gym.Env):
         try:
             # resp_pause = pause.call()
             self.pause()
-        except rospy.ServiceException as e:
+        except rospy.ServiceException:
             print("/gazebo/pause_physics service call failed")
 
         return observation, self._get_info()
@@ -248,7 +184,7 @@ class HydroneEnv(gym.Env):
     def _get_reward(self, observation):
         reward_col = -1.0
         reward_target = 1.0
-        roll, pitch, yaw = euler_from_quaternion(observation["state"][6:10])
+        roll, pitch, _ = euler_from_quaternion(observation[6:10])
 
         if (
             roll > math.pi / 4
@@ -256,7 +192,7 @@ class HydroneEnv(gym.Env):
             or pitch > math.pi / 4
             or pitch < -math.pi / 4
         ):
-            self.initial_vehicle_position = [0.0, 0.0, 2.0]
+            # self.initial_vehicle_position = [0.0, 0.0, 2.0]
 
             vel_cmd = Actuators()
             vel_cmd.angular_velocities = [0.0, 0.0, 0.0, 0.0]
@@ -267,32 +203,36 @@ class HydroneEnv(gym.Env):
             pose.position.x = self.initial_vehicle_position[0]
             pose.position.y = self.initial_vehicle_position[1]
             pose.position.z = self.initial_vehicle_position[2]
+            pose.orientation.w = self.initial_vehicle_orientation[0]
+            pose.orientation.x = self.initial_vehicle_orientation[1]
+            pose.orientation.y = self.initial_vehicle_orientation[2]
+            pose.orientation.z = self.initial_vehicle_orientation[3]
             reset_state.pose = pose
             self.reset_srv(reset_state)
             print(f"Reward flip: {reward_col}", end="\r", flush=True)
             return reward_col
 
-        if observation["target"][2] < self.goalbox_distance:
+        if observation[-1] < self.goalbox_distance:
 
             # rospy.loginfo("Goal!! ")
             # terminated = True
-            print(f"Reward: {reward_target}", end="\r", flush=True)
+            print(f"Reward goal: {reward_target}", end="\r", flush=True)
             return reward_target
 
         reward_dist = max(
             0.0,
-            1
+            1.0
             - np.linalg.norm(
-                np.asarray([self.goal_x, self.goal_y, self.goal_z])
-                - np.asarray(observation["state"][0:3])
+                np.asarray([self.goal[0], self.goal[1], self.goal[2]])
+                - np.asarray(observation[0:3])
             )
-            - math.sqrt((self.goal_z - observation["state"][2]) ** 2),
+            - math.sqrt((self.goal_z - observation[2]) ** 2),
         )
 
-        if observation["state"][2] < 0.5:
+        if observation[2] < 0.5:
             reward_dist -= 0.5
 
-        print(f"Reward: {reward_dist}", end="\r", flush=True)
+        print(f"Reward dist: {reward_dist}", end="\r", flush=True)
 
         return reward_dist
 
@@ -302,7 +242,7 @@ class HydroneEnv(gym.Env):
         rospy.wait_for_service("/gazebo/unpause_physics")
         try:
             self.unpause()
-        except rospy.ServiceException as e:
+        except rospy.ServiceException:
             print("/gazebo/unpause_physics service call failed")
 
         observation = self._get_obs()
@@ -321,7 +261,7 @@ class HydroneEnv(gym.Env):
         try:
             # resp_pause = pause.call()
             self.pause()
-        except rospy.ServiceException as e:
+        except rospy.ServiceException:
             print("/gazebo/pause_physics service call failed")
 
         return observation, reward, terminated, False, self._get_info()
