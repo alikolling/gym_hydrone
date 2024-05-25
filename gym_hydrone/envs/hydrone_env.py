@@ -10,6 +10,7 @@ from geometry_msgs.msg import Pose
 from gymnasium import spaces
 from mav_msgs.msg import Actuators
 from nav_msgs.msg import Odometry
+from scipy.spatial.transform import Rotation
 from std_srvs.srv import Empty
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 
@@ -27,6 +28,7 @@ class HydroneEnv(gym.Env):
         self.pause = rospy.ServiceProxy("/gazebo/pause_physics", Empty)
         self.reset_proxy = rospy.ServiceProxy("/gazebo/reset_world", Empty)
 
+        self.start_time = time.time()
         self.num_timesteps = 0
         self.goal = [0.0, 0.0, 2.0]
         self.initial_vehicle_position = None
@@ -39,7 +41,7 @@ class HydroneEnv(gym.Env):
         self.max_alt = 5.0
 
         self.observation_space = spaces.Box(
-            low=-(2**63), high=2**63 - 2, shape=(23,), dtype=np.float32
+            low=-(2**63), high=2**63 - 2, shape=(20,), dtype=np.float32
         )
 
         self.action_space = spaces.Box(low=0, high=1800, shape=(4,), dtype=np.float32)
@@ -78,10 +80,10 @@ class HydroneEnv(gym.Env):
         state = np.concatenate([state, last_action])
         orientation_list = state[6:10]
         position = state[0:3]
-        _ , pitch, yaw = euler_from_quaternion(orientation_list)
+        _, pitch, yaw = euler_from_quaternion(orientation_list)
 
-        yaw_angle = math.atan2(self.goal_y - position[1], self.goal_x - position[0])
-        pitch_angle = math.atan2(self.goal_z - position[2], self.goal_x - position[0])
+        yaw_angle = math.atan2(self.goal[1] - position[1], self.goal[0] - position[0])
+        pitch_angle = math.atan2(self.goal[2] - position[2], self.goal[0] - position[0])
 
         heading = np.array([0.0, 0.0, 0.0])
         heading[0] = yaw_angle - yaw
@@ -94,9 +96,9 @@ class HydroneEnv(gym.Env):
                 heading[i] += 2 * math.pi
 
         goal_distance = math.sqrt(
-            (self.goal_x - position[0]) ** 2
-            + (self.goal_y - position[1]) ** 2
-            + (self.goal_z - position[2]) ** 2
+            (self.goal[0] - position[0]) ** 2
+            + (self.goal[1] - position[1]) ** 2
+            + (self.goal[2] - position[2]) ** 2
         )
         heading[2] = goal_distance
 
@@ -120,12 +122,19 @@ class HydroneEnv(gym.Env):
         return targets
 
     def _random_orientation(self):
-        euler_angs = np.random.uniform(
-            (-math.pi / 4, -math.pi / 4, -math.pi), (math.pi / 4, math.pi / 4, math.pi)
-        )
-        quat_targs = quaternion_from_euler(euler_angs[0], euler_angs[1], euler_angs[2])
+        def euler_to_quaternion(roll, pitch, yaw):
+            rotation = Rotation.from_euler("xyz", [roll, pitch, yaw], degrees=False)
+            quaternion = rotation.as_quat(canonical=True)
+            return quaternion
 
-        return quat_targs
+        # Generate random Euler angles within specified ranges
+        roll = np.random.uniform(-math.pi / 6, math.pi / 6)
+        pitch = np.random.uniform(-math.pi / 6, math.pi / 6)
+        yaw = np.random.uniform(0, 2 * math.pi)
+
+        # Convert Euler angles to quaternion
+        quaternion = euler_to_quaternion(roll, pitch, yaw)
+        return quaternion
 
     def reset(self):
 
@@ -152,10 +161,10 @@ class HydroneEnv(gym.Env):
         pose.position.x = self.initial_vehicle_position[0]
         pose.position.y = self.initial_vehicle_position[1]
         pose.position.z = self.initial_vehicle_position[2]
-        pose.orientation.w = self.initial_vehicle_orientation[0]
-        pose.orientation.x = self.initial_vehicle_orientation[1]
-        pose.orientation.y = self.initial_vehicle_orientation[2]
-        pose.orientation.z = self.initial_vehicle_orientation[3]
+        pose.orientation.x = self.initial_vehicle_orientation[0]
+        pose.orientation.y = self.initial_vehicle_orientation[1]
+        pose.orientation.z = self.initial_vehicle_orientation[2]
+        pose.orientation.w = self.initial_vehicle_orientation[3]
         reset_state.pose = pose
 
         self.reset_srv(reset_state)
@@ -203,10 +212,10 @@ class HydroneEnv(gym.Env):
             pose.position.x = self.initial_vehicle_position[0]
             pose.position.y = self.initial_vehicle_position[1]
             pose.position.z = self.initial_vehicle_position[2]
-            pose.orientation.w = self.initial_vehicle_orientation[0]
-            pose.orientation.x = self.initial_vehicle_orientation[1]
-            pose.orientation.y = self.initial_vehicle_orientation[2]
-            pose.orientation.z = self.initial_vehicle_orientation[3]
+            pose.orientation.x = self.initial_vehicle_orientation[0]
+            pose.orientation.y = self.initial_vehicle_orientation[1]
+            pose.orientation.z = self.initial_vehicle_orientation[2]
+            pose.orientation.w = self.initial_vehicle_orientation[3]
             reset_state.pose = pose
             self.reset_srv(reset_state)
             print(f"Reward flip: {reward_col}", end="\r", flush=True)
@@ -226,7 +235,7 @@ class HydroneEnv(gym.Env):
                 np.asarray([self.goal[0], self.goal[1], self.goal[2]])
                 - np.asarray(observation[0:3])
             )
-            - math.sqrt((self.goal_z - observation[2]) ** 2),
+            - math.sqrt((self.goal[2] - observation[2]) ** 2),
         )
 
         if observation[2] < 0.5:
