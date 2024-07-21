@@ -2,8 +2,15 @@ from gymnasium.envs.registration import register
 
 register(
     id='gym_hydrone/hydrone-v0',
-    entry_point='gym_hydrone.envs:HydroneEnv'
+    entry_point='gym_hydrone.envs:HydroneHoverEnv'
 )
+
+
+register(
+    id='gym_hydrone/hydrone_nav-v0',
+    entry_point='gym_hydrone.envs:HydroneNavEnv'
+)
+
 
 goal_list = [   [0.505, 2.005, 1.0],
                 [1.005, 2.505, 1.0],

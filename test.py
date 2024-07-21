@@ -16,19 +16,19 @@ os.environ['ROS_MASTER_URI'] = "http://localhost:{}/".format(11310 + 1)
 
 
 
-env = gymnasium_wrapper.GymnasiumWrapper(gym.make('gym_hydrone/hydrone-v0'))
-
+env = gymnasium_wrapper.GymnasiumWrapper(gym.make('gym_hydrone/hydrone_nav-v0'))
+print(gym.make('gym_hydrone/hydrone_nav-v0'))
 time.sleep(5)
 observation = env.reset()
 print(observation)
 for _ in range(100):
     action = [1000.0, 1000.0, 1000.0, 1000.0]
     timestep = env.step(action)
-    print(timestep)
+    #print(timestep)
     #if terminated:
 observation = env.reset()
 for _ in range(100):
     action = [1000.0, 1000.0, 1000.0, 1000.0]
     timestep = env.step(action)
-    print(timestep)
+    #print(timestep)
 env.close()

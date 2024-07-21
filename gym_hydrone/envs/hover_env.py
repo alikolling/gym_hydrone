@@ -15,7 +15,7 @@ from std_srvs.srv import Empty
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 
 
-class HydroneEnv(gym.Env):
+class HydroneHoverEnv(gym.Env):
 
     def __init__(self):
         rospy.init_node("gym")
@@ -37,8 +37,8 @@ class HydroneEnv(gym.Env):
         )
         self.initial_vehicle_position = None
         self.initial_vehicle_orientation = None
-        self.action_base = [1000, 1000, 1000, 1000]
-        self.last_action = [0.0, 0.0, 0.0, 0.0]
+        self.action_base = [1500, 1500, 1500, 1500]
+        self.last_action = [1500, 1500, 1500, 1500]
         self.collision_distance = 0.35
         self.goalbox_distance = 0.05
 
@@ -183,7 +183,7 @@ class HydroneEnv(gym.Env):
         terminated = False
         success = False
         reward_col = -10.0
-        reward_target = 1.0
+        reward_target = 10.0
         roll, pitch, yaw = euler_from_quaternion(observation[3:7])
         if (
             roll > math.pi / 2
@@ -227,15 +227,21 @@ class HydroneEnv(gym.Env):
                     self.goal_orientation[1],
                     self.goal_orientation[2],
                 ))
+        ang_vel_err = np.linalg.norm(observation[10:13])
+        lin_vel_err = np.linalg.norm(observation[3:6])
         
         if dist < self.goalbox_distance and quat_dist < 0.1:
             success = True
+            print(f"Reward Success: {reward_target}", end="\r", flush=True)
             return reward_target, terminated, success
-
+        
         reward_dist=max(
             0.0,
-            1.0
-            - 0.4 * dist - 0.45 * quat_dist
+            2.0
+            - dist
+            - quat_dist
+            - 0.1 * lin_vel_err
+            - 0.01 * ang_vel_err
             - 0.05 * np.linalg.norm(self.action_base - observation[-4:])/1800,
         )
 
