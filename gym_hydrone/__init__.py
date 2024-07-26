@@ -11,6 +11,10 @@ register(
     entry_point='gym_hydrone.envs:HydroneNavEnv'
 )
 
+register(
+    id='gym_hydrone/hydrone_hard-v0',
+    entry_point='gym_hydrone.envs:HydroneHardNavEnv'
+)
 
 goal_list = [   [0.505, 2.005, 1.0],
                 [1.005, 2.505, 1.0],

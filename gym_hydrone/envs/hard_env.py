@@ -10,13 +10,14 @@ from geometry_msgs.msg import Pose
 from gymnasium import spaces
 from mav_msgs.msg import Actuators
 from nav_msgs.msg import Odometry
+from rotors_comm.msg import WindSpeed
 from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Empty
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 
 
-class HydroneNavEnv(gym.Env):
+class HydroneHardNavEnv(gym.Env):
 
     def __init__(self):
         rospy.init_node("gym")
@@ -42,6 +43,9 @@ class HydroneNavEnv(gym.Env):
         self.collision_distance = 0.05
         self.goalbox_distance = 0.15
 
+        
+        self.min_range = 0.55
+        self.max_range = 5.0
         self.min_alt = -5.0
         self.max_alt = 5.0
 
@@ -120,7 +124,17 @@ class HydroneNavEnv(gym.Env):
             "%H:%M:%S", time.gmtime(time.time() - self.start_time)
         )
         time_info += "-" + str(self.num_timesteps)
-        return {"time_info": time_info}
+        
+        """wind = None
+        while wind is None:
+            try:
+                wind = rospy.wait_for_message(
+                    "/haubentaucher/wind_speed", WindSpeed, timeout=None
+                )
+            except rospy.ServiceException:
+                pass"""
+        
+        return {"time_info": time_info}#, "wind": [wind.velocity.x, wind.velocity.y, wind.velocity.z]}
 
     def _random_position(self):
         targets = np.random.uniform((-100.5, -100.5, 1.50), (100.5, 100.5, 12.5))
@@ -201,11 +215,11 @@ class HydroneNavEnv(gym.Env):
             or roll < -math.pi / 2
             or pitch > math.pi / 2
             or pitch < -math.pi / 2
-            or observation[2] < 5.0
-            or observation[2] > 7.0
-            or observation[0] < -2.0
-            or observation[0] > 2.0
-            or observation[1] < -1.0
+            or observation[2] < 6.
+            or observation[2] > 7.
+            or observation[0] < -1.0
+            or observation[1] < -0.5
+            or observation[1] > 0.5
             or self._get_collision()
         ):
             self._reset_state("haubentaucher")
@@ -245,9 +259,9 @@ class HydroneNavEnv(gym.Env):
         except rospy.ServiceException:
             print("/gazebo/unpause_physics service call failed")
 
-        self.initial_vehicle_position = np.asarray([0.0, 0.0, 6.0])
-        self.initial_vehicle_orientation = np.asarray([0.0, 0.0, 0.0])
-        self.goal = np.asarray([0.0, 2.0, 6.0])
+        self.initial_vehicle_position = np.asarray([0.0, 0.0, 6.707])
+        self.initial_vehicle_orientation = np.asarray([0.0, 0.0, 0.0, 1.0])
+        self.goal = np.asarray([1.0, 0.0, 6.707])
         roll, pitch, yaw = euler_from_quaternion(self.initial_vehicle_orientation)
         self.goal_orientation[2] = yaw
 
