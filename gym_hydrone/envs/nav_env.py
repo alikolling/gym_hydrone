@@ -13,15 +13,25 @@ from nav_msgs.msg import Odometry
 from scipy.spatial.transform import Rotation
 from std_srvs.srv import Empty
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
-
+from uuv_gazebo_ros_plugins_msgs.msg import FloatStamped
+from sensor_msgs.msg import LaserScan
 
 class HydroneNavEnv(gym.Env):
 
     def __init__(self):
         rospy.init_node("gym")
 
-        self.pub_cmd_vel = rospy.Publisher(
+        self.pub_aerial_cmd_vel = rospy.Publisher(
             "/haubentaucher/gazebo/command/motor_speed", Actuators, queue_size=1
+        )
+        self.pub_thruster00 = rospy.Publisher(
+            "/haubentaucher/thrusters/0/input", FloatStamped, queue_size=1
+        )
+        self.pub_thruster01 = rospy.Publisher(
+            "/haubentaucher/thrusters/1/input", FloatStamped, queue_size=1
+        )
+        self.pub_thruster02 = rospy.Publisher(
+            "/haubentaucher/thrusters/2/input", FloatStamped, queue_size=1
         )
         self.reset_srv = rospy.ServiceProxy(
             "gazebo/set_model_state", SetModelState)
@@ -44,15 +54,17 @@ class HydroneNavEnv(gym.Env):
 
         self.min_alt = -5.0
         self.max_alt = 5.0
-
+        self.min_range = 0.25
+        self.max_range = 8.
+        
         self.observation_space = spaces.Box(
-            low=-(2**63), high=2**63 - 2, shape=(20,), dtype=np.float32
+            low=-(2**63), high=2**63 - 2, shape=(60,), dtype=np.float32
         )
 
         self.action_space = spaces.Box(
-            low=0, high=1800, shape=(4,), dtype=np.float32)
+            low=0, high=1800, shape=(7,), dtype=np.float32)
 
-    def _get_state_and_heading(self, last_action):
+    def _get_state_and_heading(self):
         state = np.zeros((13,))
         odom = None
         while odom is None:
@@ -111,11 +123,41 @@ class HydroneNavEnv(gym.Env):
         heading[2] = goal_distance
 
         state = np.concatenate([state, heading])
-        obs = np.concatenate([state, last_action])
-        return obs
+        
+        return state
+        
+    def _get_laser(self):
+        data = None
+        while data is None:
+            try:
+                data = rospy.wait_for_message('/haubentaucher/scan', LaserScan, timeout=5)
+            except:
+                pass
+        scan = np.asarray(data.ranges)
+        scan[np.isnan(scan)] = self.min_range
+        scan[np.isinf(scan)] = self.max_range
+        
+        return scan
+    
+    def _get_sonar(self):
+        data = None
+        while data is None:
+            try:
+                data = rospy.wait_for_message('/haubentaucher/sonar', LaserScan, timeout=5)
+            except:
+                pass
+        sonar = np.asarray(data.ranges)
+        sonar[np.isnan(sonar)] = self.min_range
+        sonar[np.isinf(sonar)] = self.max_range
+        
+        return sonar
 
     def _get_obs(self):
-        obs = self._get_state_and_heading(self.last_action)
+        state = self._get_state_and_heading()
+        scan = self._get_laser()
+        sonar = self._get_sonar()
+        obs = np.concatenate([state, self.last_action, sonar, scan])
+        
         return obs
 
     def _get_info(self):
@@ -151,8 +193,8 @@ class HydroneNavEnv(gym.Env):
         if model_name == "haubentaucher":
 
             vel_cmd = Actuators()
-            vel_cmd.angular_velocities = self.last_action
-            self.pub_cmd_vel.publish(vel_cmd)
+            vel_cmd.angular_velocities = self.last_action[:4]
+            self.pub_aerial_cmd_vel.publish(vel_cmd)
             reset_state = ModelState()
             reset_state.model_name = "haubentaucher"
             pose = Pose()
@@ -191,6 +233,7 @@ class HydroneNavEnv(gym.Env):
             or pitch > math.pi / 2
             or pitch < -math.pi / 2
             or observation[2] <= 0
+            or min(observation[20:]) < self.colision_distance
         ):
             self._reset_state("haubentaucher")
             #print(f"Reward flip: {reward_col}", end="\r", flush=True)
@@ -235,6 +278,7 @@ class HydroneNavEnv(gym.Env):
             success = True
             #print(f"Reward Success: {reward_target}", end="\r", flush=True)
             return reward_target, terminated, success
+        
         reward_dist=max(
             0.0,
             2.0
@@ -291,10 +335,26 @@ class HydroneNavEnv(gym.Env):
         except rospy.ServiceException:
             print("/gazebo/unpause_physics service call failed")
 
-        action=np.clip(action, 0, 1800)
-        vel_cmd=Actuators()
-        vel_cmd.angular_velocities=action
-        self.pub_cmd_vel.publish(vel_cmd)
+        rotors_vel = action[:4]
+        rotors_vel = np.clip(rotors_vel, 0, 1800)
+        rotors_vel_msg = Actuators()
+        rotors_vel_msg.angular_velocities = rotors_vel
+        self.pub_aerial_cmd_vel.publish(rotors_vel_msg)
+        
+        thrusters_thrust = action[4:]
+        thrusters_thrust = np.clip(thrusters_thrust, -200, 200)
+        
+        thrusters_thrust00_msg = FloatStamped()
+        thrusters_thrust00_msg.data = thrusters_thrust[0]
+        self.pub_thruster00.publish(thrusters_thrust00_msg)
+
+        thrusters_thrust01_msg = FloatStamped()
+        thrusters_thrust01_msg.data = thrusters_thrust[1]
+        self.pub_thruster01.publish(thrusters_thrust01_msg)
+
+        thrusters_thrust02_msg = FloatStamped()
+        thrusters_thrust02_msg.data = thrusters_thrust[2]
+        self.pub_thruster02.publish(thrusters_thrust02_msg)
 
         observation=self._get_obs()
 
