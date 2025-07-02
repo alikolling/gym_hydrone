@@ -41,7 +41,7 @@ class HydroneTunnelEnv(gym.Env):
         self.initial_vehicle_orientation = None
         self.action_base = [1500, 1500, 1500, 1500]
         self.last_action = [1500, 1500, 1500, 1500]
-        self.action_history = deque(maxlen=50)
+        #self.action_history = deque(maxlen=50)
         self.filter_window = 3
         self.collision_distance = 0.35
         self.goalbox_distance = 0.15
@@ -194,8 +194,8 @@ class HydroneTunnelEnv(gym.Env):
             or roll < -math.pi / 2
             or pitch > math.pi / 2
             or pitch < -math.pi / 2
-            or observation[2] < 5.5
-            or observation[2] > 6.5
+            #or observation[2] < 5.5
+            #or observation[2] > 6.5
             or observation[1] < -1.0
             or observation[1] > 1.0
         ):
@@ -303,13 +303,13 @@ class HydroneTunnelEnv(gym.Env):
             print("/gazebo/unpause_physics service call failed")
 
         action = np.clip(action, 0, 1800)
-        if len(self.action_history) >= self.filter_window:
-            action = savgol_filter(self.action_history, self.filter_window, 3)
+        #if len(self.action_history) >= self.filter_window:
+            #action = savgol_filter(self.action_history, self.filter_window, 3)
         vel_cmd = Actuators()
         vel_cmd.angular_velocities = action
         self.pub_cmd_vel.publish(vel_cmd)
 
-        self.action_history.append(action)
+        #self.action_history.append(action)
 
         observation = self._get_obs()
 
