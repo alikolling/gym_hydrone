@@ -15,6 +15,7 @@ from std_srvs.srv import Empty
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from uuv_gazebo_ros_plugins_msgs.msg import FloatStamped
 from sensor_msgs.msg import LaserScan
+from typing import Optional
 
 class HydroneNavEnv(gym.Env):
 
@@ -47,8 +48,8 @@ class HydroneNavEnv(gym.Env):
         )
         self.initial_vehicle_position = None
         self.initial_vehicle_orientation = None
-        self.action_base = [1500, 1500, 1500, 1500]
-        self.last_action = [1500, 1500, 1500, 1500]
+        self.action_base = [1500, 1500, 1500, 1500, 0.0, 0.0, 0.0]
+        self.last_action = [1500, 1500, 1500, 1500, 0.0, 0.0, 0.0]
         self.collision_distance = 0.35
         self.goalbox_distance = 0.15
 
@@ -58,7 +59,7 @@ class HydroneNavEnv(gym.Env):
         self.max_range = 8.
         
         self.observation_space = spaces.Box(
-            low=-(2**63), high=2**63 - 2, shape=(60,), dtype=np.float32
+            low=-(2**63), high=2**63 - 2, shape=(63,), dtype=np.float32
         )
 
         self.action_space = spaces.Box(
@@ -169,7 +170,7 @@ class HydroneNavEnv(gym.Env):
 
     def _random_position(self):
         targets = np.random.uniform(
-            (-100.5, -100.5, 1.50), (100.5, 100.5, 12.5))
+            (-3.5, -3.5, -4.50), (3.5, 3.5, 2.5))
 
         return targets
 
@@ -233,7 +234,7 @@ class HydroneNavEnv(gym.Env):
             or pitch > math.pi / 2
             or pitch < -math.pi / 2
             or observation[2] <= 0
-            or min(observation[20:]) < self.colision_distance
+            or min(observation[20:]) < self.collision_distance
         ):
             self._reset_state("haubentaucher")
             #print(f"Reward flip: {reward_col}", end="\r", flush=True)
@@ -279,20 +280,29 @@ class HydroneNavEnv(gym.Env):
             #print(f"Reward Success: {reward_target}", end="\r", flush=True)
             return reward_target, terminated, success
         
+        if observation[2] > 0.1:#aerial
+            punish_action = np.linalg.norm(np.zeros(3) - observation[-3:]) / 200
+            base_action = np.linalg.norm(self.action_base[:4] - observation[-7:-3])/1800
+        elif observation[2] < 0.1:#underwater
+            punish_action = np.linalg.norm(np.zeros(4) - observation[-7:-3])/1800
+            base_action = np.linalg.norm(self.action_base[4:] - observation[-3:])/200
+        
+        
         reward_dist=max(
             0.0,
             2.0
             - 0.1 * dist
+            - 0.1 * punish_action
             - 0.05 * lin_vel_err
             - 0.01 * ang_vel_err
-            - 0.05 * np.linalg.norm(self.action_base - observation[-4:])/1800,
-        )
+            - 0.05 * base_action,
+        )/2.0
 
         #print(f"Reward dist: {reward_dist}", end="\r", flush=True)
 
         return reward_dist, terminated, success
 
-    def reset(self):
+    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
 
         # Unpause simulation to make observation
         rospy.wait_for_service("/gazebo/unpause_physics")
@@ -302,10 +312,9 @@ class HydroneNavEnv(gym.Env):
         except rospy.ServiceException:
             print("/gazebo/unpause_physics service call failed")
 
-        self.initial_vehicle_position=self._random_position()
-        self.initial_vehicle_orientation=self._random_orientation()
-        self.goal=self.initial_vehicle_position+np.random.uniform(
-            (-2., -2., 0.), (2., 2., 1.5))
+        self.initial_vehicle_position = self._random_position()
+        self.initial_vehicle_orientation = self._random_orientation()
+        self.goal = self._random_position()
 
         roll, pitch, yaw=euler_from_quaternion(
             self.initial_vehicle_orientation)

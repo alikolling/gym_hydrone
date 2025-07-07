@@ -8,12 +8,14 @@ register(
 
 register(
     id='gym_hydrone/hydrone_nav-v0',
-    entry_point='gym_hydrone.envs:HydroneNavEnv'
+    entry_point='gym_hydrone.envs:HydroneNavEnv',
+    max_episode_steps=1000
 )
 
 register(
     id='gym_hydrone/hydrone_hard-v0',
-    entry_point='gym_hydrone.envs:HydroneHardNavEnv'
+    entry_point='gym_hydrone.envs:HydroneHardNavEnv',
+    max_episode_steps=1000
 )
 
 register(
