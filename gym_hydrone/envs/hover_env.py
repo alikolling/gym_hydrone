@@ -13,15 +13,25 @@ from nav_msgs.msg import Odometry
 from scipy.spatial.transform import Rotation
 from std_srvs.srv import Empty
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
-
+from uuv_gazebo_ros_plugins_msgs.msg import FloatStamped
+from sensor_msgs.msg import LaserScan
+from typing import Optional
 
 class HydroneHoverEnv(gym.Env):
 
     def __init__(self):
         rospy.init_node("gym")
-
-        self.pub_cmd_vel = rospy.Publisher(
+        self.pub_aerial_cmd_vel = rospy.Publisher(
             "/haubentaucher/gazebo/command/motor_speed", Actuators, queue_size=1
+        )
+        self.pub_thruster00 = rospy.Publisher(
+            "/haubentaucher/thrusters/0/input", FloatStamped, queue_size=1
+        )
+        self.pub_thruster01 = rospy.Publisher(
+            "/haubentaucher/thrusters/1/input", FloatStamped, queue_size=1
+        )
+        self.pub_thruster02 = rospy.Publisher(
+            "/haubentaucher/thrusters/2/input", FloatStamped, queue_size=1
         )
         self.reset_srv = rospy.ServiceProxy(
             "gazebo/set_model_state", SetModelState)
@@ -37,22 +47,25 @@ class HydroneHoverEnv(gym.Env):
         )
         self.initial_vehicle_position = None
         self.initial_vehicle_orientation = None
-        self.action_base = [1500, 1500, 1500, 1500]
-        self.last_action = [1500, 1500, 1500, 1500]
-        self.collision_distance = 0.35
-        self.goalbox_distance = 0.05
+        self.action_base = [1500, 1500, 1500, 1500, 100.0, 0.0, 0.0]
+        self.last_action = [1500, 1500, 1500, 1500, 0.0, 0.0, 0.0]
+        self.collision_distance = 0.5
+        self.goalbox_distance = 0.25
 
         self.min_alt = -5.0
         self.max_alt = 5.0
+        self.min_range = 0.5
+        self.max_range = 8.
 
         self.observation_space = spaces.Box(
-            low=-(2**63), high=2**63 - 2, shape=(20,), dtype=np.float32
+            low=-(2**63), high=2**63 - 2, shape=(23,), dtype=np.float32
         )
-
+        low_action = np.asarray([0.0, 0.0, 0.0, 0.0, -300.0, -300.0, -300.0])
+        high_action = np.asarray([1800.0, 1800.0, 1800.0, 1800.0, 300.0, 300.0, 300.0]) 
         self.action_space = spaces.Box(
-            low=0, high=1800, shape=(4,), dtype=np.float32)
+            low=low_action, high=high_action, shape=(7,), dtype=np.float32)
 
-    def _get_state_and_heading(self, last_action):
+    def _get_state_and_heading(self):
         state = np.zeros((13,))
         odom = None
         while odom is None:
@@ -111,11 +124,41 @@ class HydroneHoverEnv(gym.Env):
         heading[2] = goal_distance
 
         state = np.concatenate([state, heading])
-        obs = np.concatenate([state, last_action])
-        return obs
+        
+        return state
+        
+    def _get_laser(self):
+        data = None
+        while data is None:
+            try:
+                data = rospy.wait_for_message('/haubentaucher/scan', LaserScan, timeout=5)
+            except:
+                pass
+        scan = np.asarray(data.ranges)
+        scan[np.isnan(scan)] = self.min_range
+        scan[np.isinf(scan)] = self.max_range
+        
+        return scan
+    
+    def _get_sonar(self):
+        data = None
+        while data is None:
+            try:
+                data = rospy.wait_for_message('/haubentaucher/sonar', LaserScan, timeout=5)
+            except:
+                pass
+        sonar = np.asarray(data.ranges)
+        sonar[np.isnan(sonar)] = self.min_range
+        sonar[np.isinf(sonar)] = self.max_range
+        
+        return sonar
 
     def _get_obs(self):
-        obs = self._get_state_and_heading(self.last_action)
+        state = self._get_state_and_heading()
+        scan = self._get_laser() if state[2] >= 0 else np.zeros((20,)) 
+        sonar = self._get_sonar() if state[2] < 0 else np.zeros((20,))
+        obs = np.concatenate([state, self.last_action, scan, sonar])
+        
         return obs
 
     def _get_info(self):
@@ -126,10 +169,12 @@ class HydroneHoverEnv(gym.Env):
         return {"time_info": time_info}
 
     def _random_position(self):
-        targets = np.random.uniform(
-            (-100.5, -100.5, 1.50), (100.5, 100.5, 12.5))
+        target = np.random.uniform(
+            low=(-5.0, -5.0, -5.),
+            high=(5.0, 5.0, 5.)
+        )
 
-        return targets
+        return target
 
     def _random_orientation(self):
         def euler_to_quaternion(roll, pitch, yaw):
@@ -151,8 +196,8 @@ class HydroneHoverEnv(gym.Env):
         if model_name == "haubentaucher":
 
             vel_cmd = Actuators()
-            vel_cmd.angular_velocities = self.last_action
-            self.pub_cmd_vel.publish(vel_cmd)
+            vel_cmd.angular_velocities = self.last_action[:4]
+            self.pub_aerial_cmd_vel.publish(vel_cmd)
             reset_state = ModelState()
             reset_state.model_name = "haubentaucher"
             pose = Pose()
@@ -182,17 +227,19 @@ class HydroneHoverEnv(gym.Env):
     def _get_reward(self, observation):
         terminated = False
         success = False
-        reward_col = -10.0
-        reward_target = 10.0
+        reward_col = -1.0
+        reward_target = 1.0
         roll, pitch, yaw = euler_from_quaternion(observation[3:7])
         if (
             roll > math.pi / 2
             or roll < -math.pi / 2
             or pitch > math.pi / 2
             or pitch < -math.pi / 2
+            or np.any(observation[:3] > 6.0)
+            or np.any(observation[:3] < -6.0)
         ):
-            self._reset_state("haubentaucher")
-            print(f"Reward flip: {reward_col}", end="\r", flush=True)
+            #self._reset_state("haubentaucher")
+
             terminated = True
             return reward_col, terminated, success
 
@@ -219,7 +266,7 @@ class HydroneHoverEnv(gym.Env):
             quaternion = rotation.as_quat(canonical=True)
             return quaternion
 
-        dist = np.linalg.norm(self.goal - np.asarray(observation[0:3]))
+        dist = np.linalg.norm(np.asarray(observation[0:3]) - self.goal)
         quat_dist = quaternion_distance(
                 observation[3:7],
                 euler_to_quaternion(
@@ -230,26 +277,35 @@ class HydroneHoverEnv(gym.Env):
         ang_vel_err = np.linalg.norm(observation[10:13])
         lin_vel_err = np.linalg.norm(observation[3:6])
         
-        if dist < self.goalbox_distance and quat_dist < 0.1:
+        if dist < self.goalbox_distance and quat_dist < 0.5:
             success = True
-            print(f"Reward Success: {reward_target}", end="\r", flush=True)
+
             return reward_target, terminated, success
+            
+        if observation[2] > 0.1:#aerial
+            punish_action = np.linalg.norm(np.zeros(3) - observation[-3:]) / 300
+            base_action = np.linalg.norm(self.action_base[:4] - observation[-7:-3])/1800
+        elif observation[2] < -0.1:#underwater
+            punish_action = np.linalg.norm(np.zeros(4) - observation[-7:-3])/1800
+            base_action = np.linalg.norm(self.action_base[4:] - observation[-3:])/300
+        elif 0.1 > observation[2] > -0.1:#transition
+            punish_action = 0.0
+            base_action = 0.0
         
         reward_dist=max(
-            0.0,
-            2.0
-            - dist
-            - quat_dist
-            - 0.1 * lin_vel_err
-            - 0.01 * ang_vel_err
-            - 0.05 * np.linalg.norm(self.action_base - observation[-4:])/1800,
+            -1.0,
+            1.0
+            - 0.35 * dist
+            - 0.4 * quat_dist
+            - 0.1 * punish_action
+            - 0.05 * lin_vel_err
+            - 0.05 * ang_vel_err
+            - 0.05 * base_action,
         )
-
-        print(f"Reward dist: {reward_dist}", end="\r", flush=True)
 
         return reward_dist, terminated, success
 
-    def reset(self):
+    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
 
         # Unpause simulation to make observation
         rospy.wait_for_service("/gazebo/unpause_physics")
@@ -290,10 +346,26 @@ class HydroneHoverEnv(gym.Env):
         except rospy.ServiceException:
             print("/gazebo/unpause_physics service call failed")
 
-        action=np.clip(action, 0, 1800)
-        vel_cmd=Actuators()
-        vel_cmd.angular_velocities=action
-        self.pub_cmd_vel.publish(vel_cmd)
+        rotors_vel = action[:4]
+        rotors_vel = np.clip(rotors_vel, 0, 1800)
+        rotors_vel_msg = Actuators()
+        rotors_vel_msg.angular_velocities = rotors_vel
+        self.pub_aerial_cmd_vel.publish(rotors_vel_msg)
+        
+        thrusters_thrust = action[4:]
+        thrusters_thrust = np.clip(thrusters_thrust, -300, 300)
+        
+        thrusters_thrust00_msg = FloatStamped()
+        thrusters_thrust00_msg.data = thrusters_thrust[0]
+        self.pub_thruster00.publish(thrusters_thrust00_msg)
+
+        thrusters_thrust01_msg = FloatStamped()
+        thrusters_thrust01_msg.data = thrusters_thrust[1]
+        self.pub_thruster01.publish(thrusters_thrust01_msg)
+
+        thrusters_thrust02_msg = FloatStamped()
+        thrusters_thrust02_msg.data = thrusters_thrust[2]
+        self.pub_thruster02.publish(thrusters_thrust02_msg)
 
         observation=self._get_obs()
 

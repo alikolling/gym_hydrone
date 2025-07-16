@@ -2,7 +2,8 @@ from gymnasium.envs.registration import register
 
 register(
     id='gym_hydrone/hydrone-v0',
-    entry_point='gym_hydrone.envs:HydroneHoverEnv'
+    entry_point='gym_hydrone.envs:HydroneHoverEnv',
+    max_episode_steps=1000
 )
 
 

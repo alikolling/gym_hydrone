@@ -50,20 +50,21 @@ class HydroneNavEnv(gym.Env):
         self.initial_vehicle_orientation = None
         self.action_base = [1500, 1500, 1500, 1500, 0.0, 0.0, 0.0]
         self.last_action = [1500, 1500, 1500, 1500, 0.0, 0.0, 0.0]
-        self.collision_distance = 0.35
-        self.goalbox_distance = 0.15
+        self.collision_distance = 0.5
+        self.goalbox_distance = 0.25
 
         self.min_alt = -5.0
         self.max_alt = 5.0
-        self.min_range = 0.25
+        self.min_range = 0.55
         self.max_range = 8.
         
         self.observation_space = spaces.Box(
             low=-(2**63), high=2**63 - 2, shape=(63,), dtype=np.float32
         )
-
+        low_action = np.asarray([0.0, 0.0, 0.0, 0.0, -600.0, -600.0, -600.0])
+        high_action = np.asarray([1800.0, 1800.0, 1800.0, 1800.0, 600.0, 600.0, 600.0]) 
         self.action_space = spaces.Box(
-            low=0, high=1800, shape=(7,), dtype=np.float32)
+            low=low_action, high=high_action, shape=(7,), dtype=np.float32)
 
     def _get_state_and_heading(self):
         state = np.zeros((13,))
@@ -169,10 +170,46 @@ class HydroneNavEnv(gym.Env):
         return {"time_info": time_info}
 
     def _random_position(self):
-        targets = np.random.uniform(
-            (-3.5, -3.5, -4.50), (3.5, 3.5, 2.5))
+        if self.env_stage == 1:
+            obstacles = []
+        elif self.env_stage == 2:
+            obstacles = [
+            (2.0, 2.0, -2.5),
+            (-2.0, -2.0, -2.5),
+            (2.0, -2.0, -2.5),
+            (-2.0, 2.0, -2.5),
+            (-2.0, 6.0, -2.5),
+            (-6.0, 2.0, -2.5),
+            (6.0, 2.0, -2.5),
+            (6.0, -2.0, -2.5),
+            (-6.0, -2.0, -2.5),
+            (6.0, 6.0, -2.5),
+            (-6.0, 6.0, -2.5),
+            (6.0, -6.0, -2.5),
+            (-6.0, -6.0, -2.5),
+            (-2.0, -6.0, -2.5),
+            (2.0, -6.0, -2.5),
+            (2.0, 6.0, -2.5),
+            (2.0, 6.0, -2.5),  # obstacle_17 (duplicate of 16, but kept as per your XML)
+        ]
+            obstacle_radius = 1.0  # Safety margin around obstacle centers
+        
+        while True:
+            target = np.random.uniform(
+                low=(-6.0, -6.0, -4.5),
+                high=(6.0, 6.0, 2.5)
+            )
 
-        return targets
+            # Check collision with obstacles
+            collision = False
+            for obs in obstacles:
+                dist_xy = np.linalg.norm(target[:2] - np.array(obs[:2]))
+                if dist_xy < obstacle_radius + forbidden_zone_margin:
+                    collision = True
+                    break
+            
+            if not collision:
+                return target
 
     def _random_orientation(self):
         def euler_to_quaternion(roll, pitch, yaw):
@@ -225,15 +262,14 @@ class HydroneNavEnv(gym.Env):
     def _get_reward(self, observation):
         terminated = False
         success = False
-        reward_col = -10.0
-        reward_target = 10.0
+        reward_col = -1.0
+        reward_target = 1.0
         roll, pitch, yaw = euler_from_quaternion(observation[3:7])
         if (
-            roll > math.pi / 2
-            or roll < -math.pi / 2
-            or pitch > math.pi / 2
-            or pitch < -math.pi / 2
-            or observation[2] <= 0
+            roll > math.pi / 4
+            or roll < -math.pi / 4
+            or pitch > math.pi / 4
+            or pitch < -math.pi / 4
             or min(observation[20:]) < self.collision_distance
         ):
             self._reset_state("haubentaucher")
@@ -277,25 +313,28 @@ class HydroneNavEnv(gym.Env):
         
         if dist < self.goalbox_distance:
             success = True
-            #print(f"Reward Success: {reward_target}", end="\r", flush=True)
+
             return reward_target, terminated, success
         
         if observation[2] > 0.1:#aerial
-            punish_action = np.linalg.norm(np.zeros(3) - observation[-3:]) / 200
+            punish_action = np.linalg.norm(np.zeros(3) - observation[-3:]) / 500
             base_action = np.linalg.norm(self.action_base[:4] - observation[-7:-3])/1800
-        elif observation[2] < 0.1:#underwater
+        elif observation[2] < -0.1:#underwater
             punish_action = np.linalg.norm(np.zeros(4) - observation[-7:-3])/1800
-            base_action = np.linalg.norm(self.action_base[4:] - observation[-3:])/200
-        
+            base_action = np.linalg.norm(self.action_base[4:] - observation[-3:])/500
+        elif 0.1 > observation[2] > -0.1:#transition
+            punish_action = 0.0
+            base_action = 0.0
         
         reward_dist=max(
             0.0,
             2.0
             - 0.1 * dist
+            - 0.1 * quat_dist
             - 0.1 * punish_action
             - 0.05 * lin_vel_err
             - 0.01 * ang_vel_err
-            - 0.05 * base_action,
+            - 0.05 * base_action
         )/2.0
 
         #print(f"Reward dist: {reward_dist}", end="\r", flush=True)
@@ -351,7 +390,7 @@ class HydroneNavEnv(gym.Env):
         self.pub_aerial_cmd_vel.publish(rotors_vel_msg)
         
         thrusters_thrust = action[4:]
-        thrusters_thrust = np.clip(thrusters_thrust, -200, 200)
+        thrusters_thrust = np.clip(thrusters_thrust, -500, 500)
         
         thrusters_thrust00_msg = FloatStamped()
         thrusters_thrust00_msg.data = thrusters_thrust[0]
