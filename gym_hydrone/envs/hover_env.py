@@ -58,7 +58,7 @@ class HydroneHoverEnv(gym.Env):
         self.max_range = 8.
 
         self.observation_space = spaces.Box(
-            low=-(2**63), high=2**63 - 2, shape=(23,), dtype=np.float32
+            low=-(2**63), high=2**63 - 2, shape=(63,), dtype=np.float32
         )
         low_action = np.asarray([0.0, 0.0, 0.0, 0.0, -300.0, -300.0, -300.0])
         high_action = np.asarray([1800.0, 1800.0, 1800.0, 1800.0, 300.0, 300.0, 300.0]) 
