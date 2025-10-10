@@ -19,12 +19,12 @@ from typing import Optional
 
 
 
-class HydroneCurriculumEnv(gym.Env):
+class HydroneCurriculumEasyEnv(gym.Env):
 
     def __init__(self):
         rospy.init_node("gym")
         self.pub_aerial_cmd_vel = rospy.Publisher(
-            "/haubentaucher/gazebo/command/motor_speed", Actuators, queue_size=1
+            "/haubentaucher/command/motor_speed", Actuators, queue_size=1
         )
         self.pub_thruster00 = rospy.Publisher(
             "/haubentaucher/thrusters/0/input", FloatStamped, queue_size=1
@@ -178,14 +178,12 @@ class HydroneCurriculumEnv(gym.Env):
 
     def _random_position(self):
         if self.env_stage == 0:
-            return np.random.uniform(low=(-5.0, -5.0, 1.0),high=(5.0, 5.0, 10.)) # hover in the air
+            return np.random.uniform(low=(0.0, 0.0, -1.5), high=(0.0, 0.0, 1.5))  # navigate to goal air and water
         elif self.env_stage == 1:
-            return np.random.uniform(low=(-5.0, -5.0, -4.5),high=(5.0, 5.0, 10.)) # hover in water or air
+            return np.random.uniform(low=(-1.0, -1.0, -1.5), high=(1.0, 1.0, 1.5))  # navigate to goal air and water
         elif self.env_stage == 2:
-            return np.random.uniform(low=(-5.0, -5.0, 1.0), high=(5.0, 5.0, 10.))  # navigate to goal in the air
+            return np.random.uniform(low=(-4.0, -4.0, -4.5), high=(4.0, 4.0, 4.5))  # navigate to goal air and water
         elif self.env_stage == 3:
-            return np.random.uniform(low=(-5.0, -5.0, -4.5), high=(5.0, 5.0, 10.))  # navigate to goal air and water
-        elif self.env_stage == 4:
             obstacles = [
                 (2.0, 2.0, -2.5), (-2.0, -2.0, -2.5), (2.0, -2.0, -2.5), (-2.0, 2.0, -2.5),
                 (-2.0, 6.0, -2.5), (-6.0, 2.0, -2.5), (6.0, 2.0, -2.5), (6.0, -2.0, -2.5),
@@ -407,9 +405,9 @@ class HydroneCurriculumEnv(gym.Env):
         super().reset(seed=seed)
 
         self.env_stage = options['stage'] if options else 0
-        if self.env_stage < 3 and not self.deleted_obstacles:
+        if self.env_stage < 1 and not self.deleted_obstacles:
             self.delete_obstacles()
-        elif self.env_stage == 3 and self.deleted_obstacles:
+        elif self.env_stage == 1 and self.deleted_obstacles:
             self.spawn_obstacles()
         
         # Unpause simulation to make observation
@@ -423,8 +421,8 @@ class HydroneCurriculumEnv(gym.Env):
         
         self.initial_vehicle_position=self._random_position()
         self.initial_vehicle_orientation=self._random_orientation()
-        self.goal=self.initial_vehicle_position if self.env_stage in [0,1] \
-                                                else self._random_position()
+        self.goal=self._random_position()
+        
         roll, pitch, yaw=euler_from_quaternion(
             self.initial_vehicle_orientation)
         self.goal_orientation[2]=yaw

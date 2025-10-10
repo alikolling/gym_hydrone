@@ -6,7 +6,7 @@ import numpy as np
 import rospy
 from gazebo_msgs.msg import ModelState
 from gazebo_msgs.srv import SetModelState
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, Vector3, Quaternion, Transform
 from gymnasium import spaces
 from mav_msgs.msg import Actuators
 from nav_msgs.msg import Odometry
@@ -16,24 +16,21 @@ from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from uuv_gazebo_ros_plugins_msgs.msg import FloatStamped
 from sensor_msgs.msg import LaserScan
 from typing import Optional
+from trajectory_msgs.msg import MultiDOFJointTrajectory, MultiDOFJointTrajectoryPoint
+from geometry_msgs.msg import Twist
+from std_msgs.msg import Header
 
-class HydroneNavEnv(gym.Env):
+class HydroneNavEasyEnv(gym.Env):
 
     def __init__(self):
         rospy.init_node("gym")
 
-        self.pub_aerial_cmd_vel = rospy.Publisher(
-            "/haubentaucher/command/motor_speed", Actuators, queue_size=1
+        # Replace motor speed publishers with trajectory publisher
+        self.pub_trajectory = rospy.Publisher(
+            "/haubentaucher/command/trajectory", MultiDOFJointTrajectory, queue_size=1
         )
-        self.pub_thruster00 = rospy.Publisher(
-            "/haubentaucher/thrusters/0/input", FloatStamped, queue_size=1
-        )
-        self.pub_thruster01 = rospy.Publisher(
-            "/haubentaucher/thrusters/1/input", FloatStamped, queue_size=1
-        )
-        self.pub_thruster02 = rospy.Publisher(
-            "/haubentaucher/thrusters/2/input", FloatStamped, queue_size=1
-        )
+        
+        # Remove individual thruster publishers since we're using trajectory commands now
         self.reset_srv = rospy.ServiceProxy(
             "gazebo/set_model_state", SetModelState)
         self.unpause = rospy.ServiceProxy("/gazebo/unpause_physics", Empty)
@@ -48,11 +45,49 @@ class HydroneNavEnv(gym.Env):
         )
         self.initial_vehicle_position = None
         self.initial_vehicle_orientation = None
-        self.action_base = [1500, 1500, 1500, 1500, 0.0, 0.0, 0.0]
-        self.last_action = [1500, 1500, 1500, 1500, 0.0, 0.0, 0.0]
+        self.current_position = None
+        self.current_orientation = None
+        self.num_thrusters = 3
+        # thruster publishers
+        self.pub_thruster = []
+        for i in range(self.num_thrusters):
+            topic = f"/haubentaucher/thrusters/{i}/input"
+            pub = rospy.Publisher(topic, FloatStamped, queue_size=1)
+            self.pub_thruster.append(pub)
+        
+        # thruster geometry (in body frame)
+        self.thruster_positions = [
+            np.array([0.12, 0.0005, -0.1]),
+            np.array([-0.025, -0.205500, 0.08500]),
+            np.array([-0.025, 0.205500, 0.08500]),
+        ]
+        self.thruster_axes = [
+            np.array([0, 0, 1.0]),
+            np.array([0, 0, 1.0]),
+            np.array([0, 0, 1.0]),
+        ]
+        self.mass = 6.737
+        self.inertia = np.diag([0.02953, 0.2303, 0.1604])  # approximate diagonal
+        
+        self.uuv_lin_Kp = np.array([2.0, 2.0, 8.0])
+        self.uuv_lin_Kd = np.array([1.5, 1.5, 3.0])
+
+        self.uuv_ang_Kp = np.array([0.3, 0.3, 0.3])
+        self.uuv_ang_Kd = np.array([0.1, 0.1, 0.1])
+
+
+        # water surface z threshold
+        self.water_level_z = 0.0
+
+        # Change action base to represent linear, angular velocities and altitude
+        # [linear_x, linear_y, linear_z, angular_x, angular_y, angular_z]
+        self.current_lin_vel = [0.0, 0.0, 0.0]
+        self.current_ang_vel = [0.0, 0.0, 0.0]
+        self.action_base = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self.last_action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         self.collision_distance = 0.5
         self.goalbox_distance = 0.25
-        self.env_stage = 1
+
         self.min_alt = -5.0
         self.max_alt = 5.0
         self.min_range = 0.55
@@ -61,10 +96,13 @@ class HydroneNavEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-(2**63), high=2**63 - 2, shape=(63,), dtype=np.float32
         )
-        low_action = np.asarray([0.0, 0.0, 0.0, 0.0, -300.0, -300.0, -300.0])
-        high_action = np.asarray([1800.0, 1800.0, 1800.0, 1800.0, 300.0, 300.0, 300.0]) 
+        
+        # Update action space for linear and angular velocities
+        # [linear_x, linear_y, linear_z, angular_x, angular_y, angular_z]
+        low_action = np.asarray([-5.0, -5.0, -5.0, -1.0, -1.0, -1.0])  # Reduced angular velocities
+        high_action = np.asarray([5.0, 5.0, 5.0, 1.0, 1.0, 1.0])
         self.action_space = spaces.Box(
-            low=low_action, high=high_action, shape=(7,), dtype=np.float32)
+            low=low_action, high=high_action, shape=(6,), dtype=np.float32)
 
     def _get_state_and_heading(self):
         state = np.zeros((13,))
@@ -76,6 +114,12 @@ class HydroneNavEnv(gym.Env):
                 )
             except rospy.ServiceException:
                 pass
+                
+        self.current_position = [ odom.pose.pose.position.x, odom.pose.pose.position.y, odom.pose.pose.position.z, ]
+        self.current_orientation = [ odom.pose.pose.orientation.x, odom.pose.pose.orientation.y, odom.pose.pose.orientation.z, odom.pose.pose.orientation.w, ]        
+        self.current_lin_vel = [ odom.twist.twist.linear.x, odom.twist.twist.linear.y, odom.twist.twist.linear.z, ]
+        self.current_ang_vel = [ odom.twist.twist.angular.x, odom.twist.twist.angular.y, odom.twist.twist.angular.z, ]
+        
         state[0:3] = [
             odom.pose.pose.position.x,
             odom.pose.pose.position.y,
@@ -158,6 +202,7 @@ class HydroneNavEnv(gym.Env):
         state = self._get_state_and_heading()
         scan = self._get_laser() if state[2] >= 0 else np.zeros((20,)) 
         sonar = self._get_sonar() if state[2] < 0 else np.zeros((20,))
+        # Update observation to use 6-dimensional action instead of 7
         obs = np.concatenate([state, self.last_action, sonar, scan])
         
         return obs
@@ -170,46 +215,12 @@ class HydroneNavEnv(gym.Env):
         return {"time_info": time_info}
 
     def _random_position(self):
-        if self.env_stage == 1:
-            obstacles = []
-        elif self.env_stage == 2:
-            obstacles = [
-            (2.0, 2.0, -2.5),
-            (-2.0, -2.0, -2.5),
-            (2.0, -2.0, -2.5),
-            (-2.0, 2.0, -2.5),
-            (-2.0, 6.0, -2.5),
-            (-6.0, 2.0, -2.5),
-            (6.0, 2.0, -2.5),
-            (6.0, -2.0, -2.5),
-            (-6.0, -2.0, -2.5),
-            (6.0, 6.0, -2.5),
-            (-6.0, 6.0, -2.5),
-            (6.0, -6.0, -2.5),
-            (-6.0, -6.0, -2.5),
-            (-2.0, -6.0, -2.5),
-            (2.0, -6.0, -2.5),
-            (2.0, 6.0, -2.5),
-            (2.0, 6.0, -2.5),  # obstacle_17 (duplicate of 16, but kept as per your XML)
-        ]
-            obstacle_radius = 1.0  # Safety margin around obstacle centers
-        
-        while True:
-            target = np.random.uniform(
-                low=(-6.0, -6.0, -4.5),
-                high=(6.0, 6.0, 2.5)
-            )
-
-            # Check collision with obstacles
-            collision = False
-            for obs in obstacles:
-                dist_xy = np.linalg.norm(target[:2] - np.array(obs[:2]))
-                if dist_xy < obstacle_radius + forbidden_zone_margin:
-                    collision = True
-                    break
-            
-            if not collision:
-                return target
+        # For simplicity, using basic random position generation
+        # You might want to add obstacle avoidance logic here
+        return np.random.uniform(
+            low=(0.0, 0.0, 2.0),
+            high=(0.0, 0.0, 2.5)
+        )
 
     def _random_orientation(self):
         def euler_to_quaternion(roll, pitch, yaw):
@@ -229,10 +240,9 @@ class HydroneNavEnv(gym.Env):
 
     def _reset_state(self, model_name: str):
         if model_name == "haubentaucher":
-
-            vel_cmd = Actuators()
-            vel_cmd.angular_velocities = self.last_action[:4]
-            self.pub_aerial_cmd_vel.publish(vel_cmd)
+            # Publish zero velocity command on reset
+            
+            
             reset_state = ModelState()
             reset_state.model_name = "haubentaucher"
             pose = Pose()
@@ -245,6 +255,7 @@ class HydroneNavEnv(gym.Env):
             pose.orientation.w = self.initial_vehicle_orientation[3]
             reset_state.pose = pose
             self.reset_srv(reset_state)
+            #self._publish_trajectory_command([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
         elif model_name == "goal_box":
             reset_state = ModelState()
@@ -258,6 +269,90 @@ class HydroneNavEnv(gym.Env):
             self.reset_srv(reset_state)
         else:
             pass
+    
+    def _compute_wrench_from_velocity(self, action):
+        # action = [v_x, v_y, v_z, ω_x, ω_y, ω_z]
+        v_cur = np.array(self.current_lin_vel)
+        w_cur = np.array(self.current_ang_vel)
+
+        v_err = action[0:3] - v_cur
+        a_cmd = self.uuv_lin_Kp * v_err - self.uuv_lin_Kd * v_cur
+        F_des = self.mass * a_cmd
+
+        w_err = action[3:6] - w_cur
+        alpha_cmd = self.uuv_ang_Kp * w_err - self.uuv_ang_Kd * w_cur
+        tau_des = self.inertia.dot(alpha_cmd)
+
+        return F_des, tau_des
+
+    def _allocate_thrusters(self, F_des, tau_des):
+        # number of thrusters = N
+        N = len(self.thruster_positions)
+        B = np.zeros((6, N))
+        for i in range(N):
+            ai = self.thruster_axes[i]
+            ri = self.thruster_positions[i]
+            B[0:3, i] = ai
+            B[3:6, i] = np.cross(ri, ai)
+        vec = np.concatenate([F_des, tau_des])
+        # least squares solution
+        f_vec, *_ = np.linalg.lstsq(B, vec, rcond=None)
+        return f_vec
+
+    def _publish_thrusters(self, thr_vals):
+        thr_vals = np.clip(thr_vals, a_min=[-300.0, -300.0, -300.0], a_max=[300.0, 300.0, 300.0])
+        for i, f in enumerate(thr_vals):
+            msg = FloatStamped()
+            msg.data = float(f)
+            self.pub_thruster[i].publish(msg)
+        
+    def is_underwater(self):
+        # if current position below water level
+        return self.current_position[2] < self.water_level_z
+    
+    def _publish_trajectory_command(self, action):
+        """Publish trajectory command with linear and angular velocities"""
+        trajectory_msg = MultiDOFJointTrajectory()
+        
+        # Set header
+        trajectory_msg.header = Header()
+        trajectory_msg.header.seq = 0
+        trajectory_msg.header.stamp = rospy.Time.now()
+        trajectory_msg.header.frame_id = ''
+        
+        # Set joint names (empty as per your example)
+        trajectory_msg.joint_names = ['']
+        
+        # Create trajectory point
+        point = MultiDOFJointTrajectoryPoint()
+        
+        # Set transform (identity/zero)
+        self.current_position = self.current_position if self.current_position else self.initial_vehicle_position 
+        self.current_orientation = self.current_orientation if self.current_orientation else self.initial_vehicle_orientation
+        transform = Transform()
+        transform.translation = Vector3(self.current_position[0], self.current_position[1], self.current_position[2]) 
+        transform.rotation = Quaternion(self.current_orientation[0], self.current_orientation[1], self.current_orientation[2], self.current_orientation[3])
+        point.transforms = [transform]
+        
+        # Set velocities from action
+        # action: [linear_x, linear_y, linear_z, angular_x, angular_y, angular_z]
+        twist = Twist()
+        twist.linear = Vector3(action[0], action[1], action[2])
+        twist.angular = Vector3(action[3], action[4], action[5])
+        point.velocities = [twist]
+        
+        # Set accelerations (zero for now)
+        #accel_twist = Twist()
+        #accel_twist.linear = Vector3(0.0, 0.0, 0.0)
+        #accel_twist.angular = Vector3(0.0, 0.0, 0.0)
+        #point.accelerations = [accel_twist]
+        
+        # Set time from start
+        point.time_from_start = rospy.Duration(0.1)  # 100ms
+        
+        trajectory_msg.points = [point]
+        
+        self.pub_trajectory.publish(trajectory_msg)
 
     def _get_reward(self, observation):
         terminated = False
@@ -275,18 +370,8 @@ class HydroneNavEnv(gym.Env):
             #or np.any(observation[:3] < -6.0)
         ):
             self._reset_state("haubentaucher")
-            #print(f"Reward flip: {reward_col}", end="\r", flush=True)
             terminated = True
             return reward_col, terminated, success
-
-        """ if (
-            roll > math.pi / 4
-            or roll < -math.pi / 4
-            or pitch > math.pi / 4
-            or pitch < -math.pi / 4
-        ):
-            print(f"Reward flip: {reward_col}", end="\r", flush=True)
-            return reward_col """
 
         def quaternion_distance(q1, q2):
             r1 = Rotation.from_quat(q1)
@@ -315,31 +400,21 @@ class HydroneNavEnv(gym.Env):
         
         if dist < self.goalbox_distance:
             success = True
-
             return reward_target, terminated, success
         
-        if observation[2] > 0.1:#aerial
-            punish_action = np.linalg.norm(np.zeros(3) - observation[-3:]) / 300
-            base_action = np.linalg.norm(self.action_base[:4] - observation[-7:-3])/1800
-        elif observation[2] < -0.1:#underwater
-            punish_action = np.linalg.norm(np.zeros(4) - observation[-7:-3])/1800
-            base_action = np.linalg.norm(self.action_base[4:] - observation[-3:])/300
-        elif 0.1 > observation[2] > -0.1:#transition
-            punish_action = 0.0
-            base_action = 0.0
+        # Simplified action penalty for trajectory commands
+        # Penalize large velocities to encourage smooth control
+        action_penalty = np.linalg.norm(self.last_action) / 10.0
         
-        reward_dist=max(
+        reward_dist = max(
             -1.0,
             1.0
             - 0.35 * dist
             - 0.4 * quat_dist
-            - 0.1 * punish_action
+            - 0.1 * action_penalty
             - 0.05 * lin_vel_err
-            - 0.05 * ang_vel_err
-            - 0.05 * base_action,
+            - 0.05 * ang_vel_err,
         )
-
-        #print(f"Reward dist: {reward_dist}", end="\r", flush=True)
 
         return reward_dist, terminated, success
 
@@ -348,27 +423,26 @@ class HydroneNavEnv(gym.Env):
         # Unpause simulation to make observation
         rospy.wait_for_service("/gazebo/unpause_physics")
         try:
-            # resp_pause = pause.call()
             self.unpause()
         except rospy.ServiceException:
             print("/gazebo/unpause_physics service call failed")
 
         self.initial_vehicle_position = self._random_position()
-        self.initial_vehicle_orientation = self._random_orientation()
+        self.initial_vehicle_orientation = np.zeros((4,))
+        self.initial_vehicle_orientation[3] = 1
         self.goal = self._random_position()
 
-        roll, pitch, yaw=euler_from_quaternion(
+        roll, pitch, yaw = euler_from_quaternion(
             self.initial_vehicle_orientation)
-        self.goal_orientation[2]=yaw
+        self.goal_orientation[2] = yaw
 
         self._reset_state("haubentaucher")
         self._reset_state("goal_box")
 
-        observation=self._get_obs()
+        observation = self._get_obs()
 
         rospy.wait_for_service("/gazebo/pause_physics")
         try:
-            # resp_pause = pause.call()
             self.pause()
         except rospy.ServiceException:
             print("/gazebo/pause_physics service call failed")
@@ -376,8 +450,7 @@ class HydroneNavEnv(gym.Env):
         return observation, self._get_info()
 
     def step(self, action):
-        # rospy.loginfo("Step!! ")
-        terminated=False
+        terminated = False
         self.num_timesteps += 1
         rospy.wait_for_service("/gazebo/unpause_physics")
         try:
@@ -385,39 +458,33 @@ class HydroneNavEnv(gym.Env):
         except rospy.ServiceException:
             print("/gazebo/unpause_physics service call failed")
 
-        rotors_vel = action[:4]
-        rotors_vel = np.clip(rotors_vel, 0, 1800)
-        rotors_vel_msg = Actuators()
-        rotors_vel_msg.angular_velocities = rotors_vel
-        self.pub_aerial_cmd_vel.publish(rotors_vel_msg)
+        # Clip the action to the allowed range
+        action = np.clip(action, self.action_space.low, self.action_space.high)
         
-        thrusters_thrust = action[4:]
-        thrusters_thrust = np.clip(thrusters_thrust, -300, 300)
         
-        thrusters_thrust00_msg = FloatStamped()
-        thrusters_thrust00_msg.data = thrusters_thrust[0]
-        self.pub_thruster00.publish(thrusters_thrust00_msg)
 
-        thrusters_thrust01_msg = FloatStamped()
-        thrusters_thrust01_msg.data = thrusters_thrust[1]
-        self.pub_thruster01.publish(thrusters_thrust01_msg)
+        if self.is_underwater():
+            # compute F_des and τ_des from action and current state
+            F_des, tau_des = self._compute_wrench_from_velocity(action)
+            thr_vals = self._allocate_thrusters(F_des, tau_des)
+            self._publish_thrusters(thr_vals)
+            #self._publish_trajectory_command([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        else:
+            # Publish trajectory command instead of motor speeds
+            self._publish_trajectory_command(action)
+            #self._publish_thrusters([0.0, 0.0, 0.0])
 
-        thrusters_thrust02_msg = FloatStamped()
-        thrusters_thrust02_msg.data = thrusters_thrust[2]
-        self.pub_thruster02.publish(thrusters_thrust02_msg)
+        observation = self._get_obs()
 
-        observation=self._get_obs()
-
-        reward, terminated, success=self._get_reward(observation)
+        reward, terminated, success = self._get_reward(observation)
 
         info = self._get_info()
         info['terminated'] = terminated
         info['success'] = success
-        self.last_action=action
+        self.last_action = action
 
         rospy.wait_for_service("/gazebo/pause_physics")
         try:
-            # resp_pause = pause.call()
             self.pause()
         except rospy.ServiceException:
             print("/gazebo/pause_physics service call failed")
